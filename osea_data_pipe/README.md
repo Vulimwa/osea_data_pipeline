@@ -1,6 +1,6 @@
 # OSEAS Climate Risk and Energy Infrastructure Pipeline
 
-OSEAS reads the supplied Kenya energy-infrastructure assets from Earth Engine, writes durable records to PostgreSQL/PostGIS, and exposes read-only map/API endpoints. The old Kilimani development-change pipeline and case-management endpoints have been removed from the active service.
+OSEAS reads the supplied Kenya energy-infrastructure assets from Earth Engine, writes durable records to PostgreSQL/PostGIS, and exposes read-only map/API endpoints.
 
 ## Implemented components
 
