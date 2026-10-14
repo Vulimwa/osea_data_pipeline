@@ -9,7 +9,7 @@ npm ci
 python -m pip install -r requirements.txt
 ```
 
-Set `.env` locally with `DB_URL` (or supported PostgreSQL URL alias), `GEE_PROJECT_ID`, Earth Engine credentials, and all supplied `GEE_ASSET_*` values. Do not copy secrets into source control or reports. NASA FIRMS requires `NASA_FIRMS_MAP_KEY` plus an explicit fire period; without them the all-in-one run records fire as blocked.
+Set `.env` locally with `DB_URL` (or supported PostgreSQL URL alias), `GEE_PROJECT_ID`, Earth Engine credentials, and all supplied `GEE_ASSET_*` values. Do not copy secrets into source control or reports. NASA FIRMS requires `NASA_FIRMS_MAP_KEY` plus an explicit fire period; without them the all-in-one run records fire as blocked. Black Marble requires a NASA Earthdata bearer token and explicit recent start/end months selected from the LAADS manifest; no date window is silently guessed.
 
 Paste [`../database/schema.sql`](../database/schema.sql) into Supabase SQL Editor and execute it. It uses additive `CREATE ... IF NOT EXISTS`/`ALTER ... IF NOT EXISTS` statements and does not drop existing data. Then run the read-only schema check:
 
@@ -55,9 +55,15 @@ After the initial schema and environment setup, run:
 npm run oseas:pipeline
 ```
 
-It performs database preflight, configured Earth Engine feature ingestion, county/ward assignment, NASA POWER daily heat acquisition, idempotent UNOSAT import, WorldPop acquisition and population persistence, evidence-gated asset assessments, and FIRMS acquisition when a map key and explicit dates are configured. It prints every stage and writes `outputs/last_pipeline_run.json`. Use `npm run oseas:pipeline -- --skip-earth-engine` to work from the existing inventory, or `--skip-worldpop-download` when the validated raster is already present. A process lock rejects overlapping orchestrators.
+It performs database preflight, configured Earth Engine feature ingestion, county/ward assignment, NASA POWER daily heat acquisition, Black Marble monthly radiance/context when token and manifest-selected months are configured, idempotent UNOSAT import, WorldPop acquisition and population persistence, evidence-gated asset and ward/county summaries, and FIRMS acquisition when a map key and explicit dates are configured. It prints every stage and writes `outputs/last_pipeline_run.json`. Use `npm run oseas:pipeline -- --skip-earth-engine` to work from the existing inventory, or `--skip-worldpop-download` when the validated raster is already present. A process lock rejects overlapping orchestrators.
 
 The bounded Sentinel-1 flood event stage runs only when `.env` defines `OSEAS_FLOOD_BBOX`, `OSEAS_FLOOD_EVENT_START/END`, and `OSEAS_FLOOD_BASELINE_START/END`; no event window is guessed. `OSEAS_HEAT_START_DATE`, `OSEAS_HEAT_END_DATE`, and `OSEAS_HEAT_SCREEN_THRESHOLD_C` configure heat processing (defaults: 2024 and 35 C). `OSEAS_FIRE_START_DATE/END`, `OSEAS_FIRE_BBOX`, `OSEAS_FIRE_SENSOR`, and `OSEAS_FIRE_PROXIMITY_KM` configure FIRMS.
+
+### NASA VIIRS Black Marble nighttime lights
+
+NASA VNP46A3 is registered as `nasa_viirs_black_marble_monthly`. Review the [official product page](https://ladsweb.modaps.eosdis.nasa.gov/missions-and-measurements/products/VNP46A3) and current [LAADS manifest/API guide](https://ladsweb.modaps.eosdis.nasa.gov/tools-and-services/api-v2/quick-start-guide/) for complete recent Kenya months before setting `NASA_EARTHDATA_TOKEN`, `OSEAS_NTL_START_MONTH`, and `OSEAS_NTL_END_MONTH` in `.env`. The dates must cover exactly 36 inclusive, complete months. The BlackMarblePy manifest check rejects missing tile/month combinations before downloads; the adapter then extracts one month at a time to bound working memory. `OSEAS_NTL_BASELINE_START_MONTH/END_MONTH` default to 2012-01 through 2015-12. Run `npm run oseas:nightlights` or let the configured pipeline invoke it.
+
+The adapter retains product quality flags, monthly valid-observation fractions, source checksum, selected periods, and nulls for missing data. Administrative statistics are polygon zonal summaries. Energy-asset and critical-service contextual statistics use a 500 m buffer around a representative point. The `nightlights` GeoJSON layer exposes recent median radiance, baseline median radiance, percent change, quality/coverage properties, source periods, and provenance. A measured zero is distinguishable from missing/invalid observations. Radiance is contextual evidence only: it cannot establish household electricity access, electrical service dependency, outage duration, or asset damage. The package downloads source rasters to ignored `data/raw/viirs_black_marble/`.
 
 The pipeline is restartable: source feature upserts use stable IDs, WorldPop result IDs include both raster and source-footprint fingerprints, and evidence assessments use stable IDs over their input evidence. A repeated identical result does not create duplicate assessment rows. The run continues through independent stages if one optional source is blocked and reports each outcome.
 
@@ -107,7 +113,7 @@ After the latest source ingestion is `completed` or `partial` with zero failed s
 npm run oseas:assign-admin
 ```
 
-Points use polygon coverage. Lines and polygons use intersections; line lengths and polygon areas are measured on the clipped part in each unit. The flood command refreshes these assignments itself before summaries, so this standalone step is optional when only flood results are needed.
+Assignments are processed in 2,000-asset batches with progress/ETA output and deterministic asset/unit upserts. Points use polygon coverage. Lines and polygons use intersections; line lengths and polygon areas are measured on the clipped part in each unit. Run this before standalone flood screening; the one-command pipeline runs it before heat, population and assessments.
 
 ## 5. Run a bounded flood screen
 

@@ -14,6 +14,10 @@ NASA POWER daily T2M_MAX is acquired over the bounded Kenya extent using the pro
 
 NASA FIRMS VIIRS detections are retained as point events with sensor/acquisition metadata and the source confidence category. Optional asset exposure is point-to-asset distance within configured kilometers. The result means proximity to a satellite active-fire detection; it is not a fire perimeter, burned area, confirmed asset impact or proof of no fire. A burned-area product remains separate work.
 
+### Nighttime lights and human-activity context
+
+NASA VIIRS Black Marble monthly VNP46A3 near-nadir snow-free radiance is summarized with quality flags 1 (low observation count), 2 (gap-filled) and 255 (fill) excluded. The adapter computes a median over explicitly selected monthly composites for a recent period and a separately recorded 2012-2015 baseline, then percent change when the baseline median is nonzero. Missing/invalid months do not become zero; valid-month coverage and valid pixel counts accompany the estimate. A mapped zero is retained only when a valid pixel contributed. Counties/wards use polygon zonal statistics. Energy assets and critical services use a documented 500 m buffer around a representative point to contextualize nearby lights. The data are not electricity access, feeder linkage, outage duration, energy use, or proof of damage. Exact recent dates must be selected from the LAADS manifest and are retained in provenance; the pipeline does not assert an unavailable "latest 36 months" window.
+
 ### Criticality and service dependencies
 
 Only explicitly verified `service_dependencies` relationships count as verified downstream-service context. Candidate relationships remain candidates; asset proximity does not create electrical connectivity. The engine stores source asset attributes and relationship evidence but does not calculate a numeric criticality score without validated topology, served load, redundancy and defensible normalization.
@@ -21,6 +25,8 @@ Only explicitly verified `service_dependencies` relationships count as verified 
 ### Vulnerability and resilience
 
 The engine carries measured hazard exposure into asset vulnerability context and records missing sensitivity/adaptive-capacity evidence. It withholds a comprehensive vulnerability score until those inputs exist. Resilience is reported per evidence dimension (hazard exposure, verified alternative supply, topology, outage/restoration and service dependency). Unknown dimensions stay unknown; no composite resilience score is emitted.
+
+The same run writes a current ward and county summary and exposes it through `vulnerability_summaries` and the administrative-summary endpoint. It includes the number of assigned assets, per-asset type counts, observed hazard-exposure denominators, hazard-specific counts, and the number of composite scores withheld. `systemClassCounts` separates known centralized network classes and decentralized mini-grids, with distribution assets, generation assets, and unclassified asset types kept distinct. This is an inventory-class grouping, not a finding about feeder connectivity or islanding. A summary is `partial` when measured exposure evidence exists, `unknown` when assets exist but no measured exposure is available, and `not_assessed` when no assets are assigned. These are screening summaries, not validated vulnerability scores.
 
 ### Intervention output
 
@@ -32,7 +38,7 @@ Source-feature IDs and observed source identifiers are stable. Raster-based popu
 
 ## Explicitly outstanding
 
-The current implementation does not produce standalone CHIRPS/ERA5 rainfall anomaly indicators, reusable terrain/drainage/flow-accumulation products, Landsat LST composites, MODIS/Copernicus burned-area outputs, verified feeder topology, scientific criticality/vulnerability/resilience scores, or validated intervention benefits. Kenya-specific precision/recall/IoU requires compatible reference labels and has not been performed.
+The current implementation does not produce standalone CHIRPS/ERA5 rainfall anomaly indicators, reusable terrain/drainage/flow-accumulation products, Landsat LST composites, MODIS/Copernicus burned-area outputs, verified feeder topology, scientific criticality/vulnerability/resilience scores, or validated intervention benefits. Black Marble acquisition still requires an Earthdata token and manifest-selected periods; no live radiance outputs are claimed until an authenticated run succeeds. Kenya-specific precision/recall/IoU requires compatible reference labels and has not been performed.
 
 ## Status meanings
 

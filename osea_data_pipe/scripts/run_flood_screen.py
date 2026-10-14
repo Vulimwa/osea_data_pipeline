@@ -17,7 +17,6 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from oseas.catalog import BY_KEY
 from oseas.config import database_url
 from oseas.flood import METHOD_VERSION, build_candidate_vectors, stable_event_fingerprint, validate_bbox
-from oseas.spatial import refresh_asset_admin_assignments
 
 LOG = logging.getLogger("oseas.flood")
 NAMESPACE = uuid.UUID("f31e7f78-7742-4223-8644-b45517271c2a")
@@ -145,9 +144,13 @@ def _persist_output(cur: Any, run_id: str, fingerprint: str, parameters: dict[st
         (parameters["event_start"], parameters["event_end"], METHOD_VERSION, fingerprint, json.dumps(quality), run_id, run_id),
     )
     exposure_count = cur.rowcount
-    # Refresh spatial membership and use boundary-specific clipped measures for line features.
-    LOG.info("Updating current asset-to-ward/county intersections")
-    assignment_count = refresh_asset_admin_assignments(cur, run_id)
+    # Boundary membership is a separately batched pipeline stage. Do not perform
+    # a national asset-by-boundary join inside this event transaction.
+    cur.execute("SELECT count(*) FROM asset_admin_assignments WHERE is_current=TRUE")
+    assignment_count = cur.fetchone()[0]
+    if assignment_count == 0:
+        raise RuntimeError("No current asset-to-ward/county assignments; run `npm run oseas:assign-admin` before flood screening")
+    LOG.info("Using %s current ward/county asset assignments", assignment_count)
     cur.execute(
         """WITH unit_asset AS (
              SELECT rel.administrative_unit_id,rel.energy_asset_id

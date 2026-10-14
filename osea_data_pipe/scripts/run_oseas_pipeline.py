@@ -91,6 +91,15 @@ def main() -> int:
             stages.append({"stage": "asset-to-county-and-ward assignment", "status": "blocked", "reason": "source ingestion failed"})
             stages.append({"stage": "NASA POWER heat acquisition and exposure", "status": "blocked", "reason": "no configured asset inventory update completed"})
 
+        ntl_token = os.getenv("NASA_EARTHDATA_TOKEN", "").strip()
+        ntl_start = os.getenv("OSEAS_NTL_START_MONTH", "").strip()
+        ntl_end = os.getenv("OSEAS_NTL_END_MONTH", "").strip()
+        if ntl_token and ntl_start and ntl_end:
+            run_stage("NASA VIIRS Black Marble monthly radiance and context", python_run("scripts/ingest_viirs_black_marble.py"), stages)
+        else:
+            stages.append({"stage": "NASA VIIRS Black Marble monthly radiance and context", "status": "blocked",
+              "reason": "NASA_EARTHDATA_TOKEN and explicitly manifest-verified OSEAS_NTL_START_MONTH/OSEAS_NTL_END_MONTH are required"})
+
         unosat_ok = run_stage("UNOSAT flood reference ingest", python_run("scripts/ingest_unosat_flood_reference.py"), stages)
 
         worldpop_file = ROOT / "data" / "raw" / "worldpop" / "ken_pop_2024_CN_100m_R2025A_v1.tif"

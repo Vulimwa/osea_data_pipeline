@@ -20,6 +20,24 @@ def _stable_id(table: str, asset_id: str, evidence: Any) -> uuid.UUID:
     return uuid.uuid5(ID_NAMESPACE, f"{METHOD_VERSION}|{table}|{asset_id}|{digest}")
 
 
+def _system_class_counts(by_type: dict[str, int]) -> dict[str, int]:
+    counts = {"centralizedGridNetworkAssets": 0, "decentralizedMiniGrids": 0,
+              "distributionAssets": 0, "generationAssets": 0, "systemClassUnclassified": 0}
+    for raw_type, asset_count in by_type.items():
+        asset_type = raw_type.casefold()
+        if "mini_grid" in asset_type or "minigrid" in asset_type:
+            counts["decentralizedMiniGrids"] += asset_count
+        elif "transformer" in asset_type or "distribution" in asset_type:
+            counts["distributionAssets"] += asset_count
+        elif asset_type in {"primary_substation", "substation", "transmission_line", "network_line"} or "transmission" in asset_type:
+            counts["centralizedGridNetworkAssets"] += asset_count
+        elif "power_station" in asset_type or "power_plant" in asset_type or "generator" in asset_type:
+            counts["generationAssets"] += asset_count
+        else:
+            counts["systemClassUnclassified"] += asset_count
+    return counts
+
+
 def assess_assets(connection: Any, *, batch_size: int = 500) -> dict[str, int | str]:
     """Persist non-fabricated asset assessments, idempotent by input evidence hash.
 
@@ -32,7 +50,8 @@ def assess_assets(connection: Any, *, batch_size: int = 500) -> dict[str, int | 
     run_id = uuid.uuid4()
     method = METHOD_VERSION
     counts = {"assets_processed": 0, "criticality_assessments": 0, "dependency_assessments": 0,
-              "vulnerability_assessments": 0, "resilience_assessments": 0, "intervention_candidates": 0}
+              "vulnerability_assessments": 0, "resilience_assessments": 0, "intervention_candidates": 0,
+              "ward_vulnerability_summaries": 0, "county_vulnerability_summaries": 0}
     with connection.cursor() as cur:
         cur.execute("SELECT pg_try_advisory_lock(hashtext(%s))", ("oseas_evidence_gated_assessments",))
         if not cur.fetchone()[0]:
@@ -187,6 +206,68 @@ def assess_assets(connection: Any, *, batch_size: int = 500) -> dict[str, int | 
                 counts["intervention_candidates"] += max(cur.rowcount, 0)
             connection.commit()
             print(f"Assessment progress: assets={counts['assets_processed']}; criticality={counts['criticality_assessments']}; vulnerability={counts['vulnerability_assessments']}; resilience={counts['resilience_assessments']}; interventions={counts['intervention_candidates']}", flush=True)
+        print("Assessment progress: aggregating current evidence by ward and county", flush=True)
+        with connection.cursor() as cur:
+            cur.execute("""SELECT u.id::text,u.unit_level,
+                count(DISTINCT aa.energy_asset_id)::int AS assigned_assets,
+                count(DISTINCT v.energy_asset_id)::int AS vulnerability_rows,
+                count(DISTINCT e.energy_asset_id) FILTER (WHERE e.exposure_status IN ('exposed','not_exposed'))::int AS measured_exposure_assets,
+                count(DISTINCT e.energy_asset_id) FILTER (WHERE e.exposure_status='exposed')::int AS exposed_assets,
+                count(DISTINCT e.energy_asset_id) FILTER (WHERE e.exposure_status IN ('unknown','not_assessed'))::int AS unknown_exposure_assets,
+                min(e.assessment_period_start),max(e.assessment_period_end)
+              FROM administrative_units u
+              LEFT JOIN asset_admin_assignments aa ON aa.administrative_unit_id=u.id AND aa.unit_level=u.unit_level AND aa.is_current=TRUE
+              LEFT JOIN asset_vulnerability_assessments v ON v.energy_asset_id=aa.energy_asset_id AND v.processing_run_id=%s
+              LEFT JOIN asset_hazard_exposure e ON e.energy_asset_id=aa.energy_asset_id
+              WHERE u.unit_level IN ('ward','county') GROUP BY u.id,u.unit_level ORDER BY u.unit_level,u.id""", (run_id,))
+            unit_rows = cur.fetchall()
+            cur.execute("""SELECT u.id::text,e.hazard_type,
+                count(DISTINCT e.energy_asset_id) FILTER (WHERE e.exposure_status IN ('exposed','not_exposed'))::int AS measured_assets,
+                count(DISTINCT e.energy_asset_id) FILTER (WHERE e.exposure_status='exposed')::int AS exposed_assets,
+                count(DISTINCT e.energy_asset_id) FILTER (WHERE e.exposure_status IN ('unknown','not_assessed'))::int AS unknown_assets
+              FROM administrative_units u JOIN asset_admin_assignments aa
+                ON aa.administrative_unit_id=u.id AND aa.unit_level=u.unit_level AND aa.is_current=TRUE
+              JOIN asset_hazard_exposure e ON e.energy_asset_id=aa.energy_asset_id
+              WHERE u.unit_level IN ('ward','county') GROUP BY u.id,e.hazard_type""")
+            hazard_rows = cur.fetchall()
+            hazards_by_unit: dict[str, dict[str, dict[str, int]]] = {}
+            for unit_id, hazard_type, measured, exposed, unknown in hazard_rows:
+                hazards_by_unit.setdefault(unit_id, {})[hazard_type] = {
+                    "measuredAssets": measured, "exposedAssets": exposed, "unknownAssets": unknown}
+            cur.execute("""SELECT aa.administrative_unit_id::text,lower(a.asset_type),count(DISTINCT a.id)::int
+              FROM asset_admin_assignments aa JOIN energy_assets a ON a.id=aa.energy_asset_id
+              WHERE aa.is_current=TRUE GROUP BY aa.administrative_unit_id,lower(a.asset_type)""")
+            asset_type_counts: dict[str, dict[str, int]] = {}
+            for unit_id, asset_type, asset_count in cur.fetchall():
+                asset_type_counts.setdefault(unit_id, {})[asset_type] = asset_count
+            for unit_id, level, assigned, vulnerability_rows, measured, exposed, unknown, period_start, period_end in unit_rows:
+                hazard_counts = hazards_by_unit.get(unit_id, {})
+                status = "not_assessed" if assigned == 0 else ("partial" if measured > 0 else "unknown")
+                by_type = asset_type_counts.get(unit_id, {})
+                system_classes = _system_class_counts(by_type)
+                asset_counts = {"assignedAssets": assigned, "vulnerabilityAssessmentRows": vulnerability_rows,
+                  "assetsWithMeasuredHazardExposure": measured, "assetsWithCandidateExposure": exposed,
+                  "assetsWithUnknownExposure": unknown, "assetTypeCounts": by_type,
+                  "systemClassCounts": system_classes, "compositeVulnerabilityScoreAvailable": 0}
+                provenance = {"method": method, "assessmentRunId": str(run_id),
+                  "scoreStatus": "withheld", "summaryUnit": level,
+                  "systemClassMethod": "inventory asset_type grouping only; does not infer feeders, islanding, or electrical connectivity",
+                  "missingEvidence": ["validated asset condition and sensitivity", "adaptive capacity and redundancy",
+                    "verified service dependencies or served population", "calibrated vulnerability normalization"],
+                  "interpretation": "Administrative screening summary of stored asset evidence; it is not an outage probability or validated vulnerability score."}
+                summary_id = _stable_id(f"{level}_vulnerability_summary", unit_id, "current")
+                target = "ward_vulnerability_summary" if level == "ward" else "county_vulnerability_summary"
+                cur.execute(f"""INSERT INTO {target}
+                  (id,{level}_id,assessment_run_id,period_start,period_end,summary_status,asset_counts,hazard_counts,confidence,provenance,created_at)
+                  VALUES (%s,%s,%s,%s,%s,%s,%s::jsonb,%s::jsonb,NULL,%s::jsonb,NOW())
+                  ON CONFLICT(id) DO UPDATE SET assessment_run_id=EXCLUDED.assessment_run_id,
+                    period_start=EXCLUDED.period_start,period_end=EXCLUDED.period_end,summary_status=EXCLUDED.summary_status,
+                    asset_counts=EXCLUDED.asset_counts,hazard_counts=EXCLUDED.hazard_counts,
+                    provenance=EXCLUDED.provenance,created_at=NOW()""",
+                  (summary_id, unit_id, run_id, period_start, period_end, status,
+                   _canonical(asset_counts), _canonical(hazard_counts), _canonical(provenance)))
+                counts[f"{level}_vulnerability_summaries"] += 1
+        connection.commit()
         with connection.cursor() as cur:
             cur.execute("UPDATE ingestion_runs SET status='completed',finished_at=NOW(),metadata=metadata||%s::jsonb WHERE id=%s",
                         (_canonical(counts), run_id))

@@ -8,8 +8,8 @@ Base URL: `/api/v1/oseas`. Routes require a Supabase access token when `OSEAS_RE
 2. Call `GET /layers` to enumerate map layers currently registered in the API.
 3. Load available source/reference features with `GET /layers/flood_reference/geojson?eventKey=...` or `GET /layers/hydrography/geojson?type=river|lake`.
 4. Load model candidates with `GET /layers/flood_candidate/geojson?bbox=west,south,east,north`.
-5. Load exposure summaries with `GET /layers/asset_exposure/geojson?bbox=...` and population estimates with the filters below.
-6. For an asset, call `GET /assets/{uuid}/exposure` and `GET /assets/{uuid}/vulnerability`. An empty vulnerability response is unassessed, not a low score.
+5. Load exposure summaries with `GET /layers/asset_exposure/geojson?bbox=...`, ward/county screening with `GET /layers/vulnerability_summaries/geojson?bbox=...`, and population estimates with the filters below.
+6. For an asset, call `GET /assets/{uuid}/exposure`, `/criticality`, `/service-dependencies`, and `/vulnerability`. An empty or unknown result is unassessed/insufficient evidence, not low risk.
 7. Show run provenance through `GET /runs?limit=100&offset=0` and `GET /runs/{uuid}`.
 
 ## Population exposure layer
@@ -67,6 +67,14 @@ The numbers above illustrate the response shape only; do not present example val
 - `GET /administrative/{ward|county}/{uuid}/summary`
 - `GET /priorities?limit=100&offset=0`
 - `GET /layers/coverage/geojson?bbox=...`
+- `GET /layers/nightlights/geojson?bbox=...&limit=100&offset=0`
+- `GET /layers/vulnerability_summaries/geojson?bbox=...&limit=100&offset=0`
 - `GET /catalog` includes provider, temporal/spatial coverage, units, attribution, adapter and retrieval status.
 
-Only documented routes backed by stored records should be shown as available. Current heat, rainfall anomaly, fire, criticality, vulnerability, resilience and intervention ranking products are not yet computed; empty result layers should display `not_assessed` or be hidden behind an explicit unavailable state. See [implementation status](IMPLEMENTATION_STATUS.md) and [API contracts](API_CONTRACTS.md).
+## Nighttime lights
+
+The `nightlights` layer contains one feature per administrative unit, energy asset, or critical service with `radianceMetrics.NTL_RECENT_MEDIAN_RADIANCE`, `radianceMetrics.NTL_BASELINE_MEDIAN_RADIANCE`, and `radianceMetrics.NTL_MEDIAN_CHANGE_PERCENT`. Admin statistics are polygon summaries located at an interior representative point; asset/service statistics summarize a documented 500 m context buffer around a representative point. Read `unit`, `recentPeriod`, `baselinePeriod`, `recentValidMonthFraction`, `baselineValidMonthFraction`, quality exclusions, and provenance from feature properties. A zero metric with valid months is an observed zero; a null metric or zero valid-month fraction means insufficient observations. Change is a contextual signal for investigation. It does not show grid connection, feeder dependency, outage duration, or damage.
+
+This layer becomes available only after a complete-month period has been checked against the NASA LAADS manifest and the NASA Earthdata token is configured. Selected dates and excluded product quality flags are stored in provenance. The data can contain fire, gas-flare, observation, and other human-activity signals.
+
+Only documented routes backed by stored records should be shown as available. The readiness response reports heat, fire, nighttime lights, and population exposure separately. `not_assessed` means no stored result, while a blocked source reports its credential or configuration requirement. Ward/county vulnerability summaries report assessed denominators and evidence gaps; they do not show validated numeric risk scores. Criticality, resilience and intervention records express evidence status; they do not become validated numeric rankings when required topology, outage history, engineering criteria, or intervention benefit evidence is missing. Rainfall anomaly, Landsat LST, burned-area, future projection and Kenya-specific validation outputs remain outstanding. See [implementation status](IMPLEMENTATION_STATUS.md) and [API contracts](API_CONTRACTS.md).
