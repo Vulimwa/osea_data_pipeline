@@ -343,7 +343,9 @@ const listAssets = asyncRoute(async (req, res) => {
   }
   if (req.query.bbox) {
     const box = bboxFilter(req.query.bbox, values.length + 1);
-    filters.push(box.sql);
+    // bboxFilter prefixes " AND ..." for callers that append to an existing WHERE.
+    // listAssets builds predicates itself, so strip the leading AND.
+    filters.push(box.sql.replace(/^\s*AND\s+/i, '').trim());
     values.push(...box.params);
   }
   const where = filters.length ? `WHERE ${filters.join(' AND ')}` : '';
