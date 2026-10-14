@@ -17,6 +17,15 @@ Paste [`../database/schema.sql`](../database/schema.sql) into Supabase SQL Edito
 npm run db:setup
 ```
 
+The bundled 2024 UNOSAT reference polygons are local files and do not require Earth Engine. Check them before database ingestion, then import after the schema check:
+
+```powershell
+npm run oseas:flood:unosat:audit
+npm run oseas:flood:unosat:ingest
+```
+
+The audit is read-only. The import upserts four source polygons by dataset/file/feature key into `flood_reference_features`; it is safe to rerun. The source contains two event codes (`FL20240421KEN`, `FL20240426KEN`) and labels its own field validation as not yet complete. PostGIS repairs invalid polygon topology for storage, while the original attributes remain preserved. This does not validate any model output.
+
 ## 2. Check Earth Engine source access
 
 The `.env` now includes the supplied river, lake and Nov 2023 flood Earth Engine asset IDs. After applying the additive schema, run only those sources with `npm run oseas:ingest -- --datasets kenya_rivers,kenya_lakes,kenya_flood_2023_reference`. Page upserts are keyed by the original source feature ID and do not duplicate existing rows.

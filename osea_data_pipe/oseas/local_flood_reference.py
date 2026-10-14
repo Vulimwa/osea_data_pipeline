@@ -5,6 +5,8 @@ from __future__ import annotations
 import hashlib
 import json
 import re
+import threading
+import time
 from datetime import date, datetime
 from pathlib import Path
 from typing import Any, Iterator
@@ -52,6 +54,27 @@ def _bundle_checksum(path: Path) -> str:
     return digest.hexdigest()
 
 
+def _heartbeat(source: Iterator[Any], label: str, enabled: bool) -> Iterator[Any]:
+    if not enabled:
+        yield from source
+        return
+    stopped = threading.Event()
+    started = time.monotonic()
+
+    def report() -> None:
+        while not stopped.wait(20):
+            elapsed = time.monotonic() - started
+            print(f"UNOSAT: still processing {label}; elapsed={elapsed:.0f}s", flush=True)
+
+    worker = threading.Thread(target=report, name="oseas-unosat-progress", daemon=True)
+    worker.start()
+    try:
+        yield from source
+    finally:
+        stopped.set()
+        worker.join(timeout=1)
+
+
 def _event_date(properties: dict[str, Any], filename: str) -> str | None:
     for key, value in properties.items():
         if key.casefold() in {"sensor_dat", "event_date", "date_proc"} and value:
@@ -82,7 +105,7 @@ def read_reference_features(source_dir: Path = DEFAULT_SOURCE_DIR, *, progress: 
                 raise ValueError(f"Missing coordinate reference system: {path.name}")
             source_crs = CRS.from_user_input(source.crs_wkt or source.crs)
             transformer = None if source_crs.to_epsg() == 4326 else Transformer.from_crs(source_crs, "EPSG:4326", always_xy=True).transform
-            for ordinal, feature in enumerate(source):
+            for ordinal, feature in enumerate(_heartbeat(source, path.name, progress)):
                 if not feature.get("geometry"):
                     raise ValueError(f"Feature {ordinal} in {path.name} has no geometry")
                 geom = shape(feature["geometry"])
@@ -122,7 +145,7 @@ def read_reference_features(source_dir: Path = DEFAULT_SOURCE_DIR, *, progress: 
                 }
 
 
-def inspect_reference(source_dir: Path = DEFAULT_SOURCE_DIR) -> dict[str, Any]:
+def inspect_reference(source_dir: Path = DEFAULT_SOURCE_DIR, *, progress: bool = False) -> dict[str, Any]:
     """Perform a local, read-only audit suitable before database setup."""
     files = selected_files(source_dir)
     feature_count = 0
@@ -131,12 +154,14 @@ def inspect_reference(source_dir: Path = DEFAULT_SOURCE_DIR) -> dict[str, Any]:
     geometry_types: set[str] = set()
     validation_statuses: set[str] = set()
     for path in files:
+        if progress:
+            print(f"UNOSAT audit: inspecting {path.name}", flush=True)
         with fiona.open(path) as source:
             if not source.crs and not source.crs_wkt:
                 raise ValueError(f"Missing coordinate reference system: {path.name}")
             feature_count += len(source)
             geometry_types.add(str(source.schema.get("geometry", "unknown")))
-            for feature in source:
+            for feature in _heartbeat(source, f"audit {path.name}", progress):
                 properties = {str(key): _json_value(value) for key, value in dict(feature["properties"]).items()}
                 event_key = next((str(value).strip() for key, value in properties.items()
                                   if key.casefold() in {"eventcode", "event_id", "eventid"} and value), EVENT_KEY_FALLBACK)
@@ -171,9 +196,9 @@ def _ensure_dataset(cur: Any, source_dir: Path) -> None:
     )
 
 
-def ingest_reference(connection: Any, source_dir: Path = DEFAULT_SOURCE_DIR, batch_size: int = 100) -> dict[str, Any]:
+def ingest_reference(connection: Any, source_dir: Path = DEFAULT_SOURCE_DIR, batch_size: int = 1, summary: dict[str, Any] | None = None) -> dict[str, Any]:
     """Idempotently batch-upsert local event polygons and their run provenance."""
-    summary = inspect_reference(source_dir)
+    summary = summary or inspect_reference(source_dir, progress=True)
     print(f"UNOSAT: {summary['feature_count']} reference polygons across {len(summary['files'])} shapefiles; events={','.join(summary['event_keys'])}", flush=True)
     records = list(read_reference_features(source_dir, progress=True))
     run_id = __import__("uuid").uuid4()

@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import argparse
 import json
-import os
 import sys
 from pathlib import Path
 
@@ -21,7 +20,7 @@ def main() -> int:
     parser.add_argument("--input-dir", type=Path, default=DEFAULT_SOURCE_DIR)
     args = parser.parse_args()
 
-    report = inspect_reference(args.input_dir)
+    report = inspect_reference(args.input_dir, progress=True)
     if args.audit_only:
         print(json.dumps(report, indent=2))
         return 0
@@ -33,11 +32,13 @@ def main() -> int:
 
     with psycopg.connect(url, connect_timeout=15, options="-c statement_timeout=120000", application_name="oseas-unosat-reference") as connection:
         with connection.cursor() as cur:
-            cur.execute("SELECT to_regclass('public.flood_reference_features'), to_regclass('public.ingestion_runs')")
+            cur.execute("""SELECT to_regclass('public.flood_reference_features'), to_regclass('public.ingestion_runs'),
+                                 to_regclass('public.datasets'), to_regclass('public.dataset_versions'),
+                                 to_regclass('public.data_quality_checks')""")
             tables = cur.fetchone()
             if not all(tables):
                 raise RuntimeError("OSEAS reference schema is missing; apply database/schema.sql and run npm run db:setup first")
-        result = ingest_reference(connection, args.input_dir)
+        result = ingest_reference(connection, args.input_dir, summary=report)
     print(json.dumps({**report, **result}, indent=2))
     return 0
 
