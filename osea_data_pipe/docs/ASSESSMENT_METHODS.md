@@ -12,7 +12,7 @@ NASA POWER daily T2M_MAX is acquired over the bounded Kenya extent using the pro
 
 ### Fire
 
-NASA FIRMS VIIRS detections are retained as point events with sensor/acquisition metadata and the source confidence category. Optional asset exposure is point-to-asset distance within configured kilometers. The result means proximity to a satellite active-fire detection; it is not a fire perimeter, burned area, confirmed asset impact or proof of no fire. A burned-area product remains separate work.
+NASA FIRMS VIIRS detections are retained as point events with sensor/acquisition metadata and the source confidence category. Latest-day NRT results are requested inside the Kenya county-boundary envelope and then clipped to the exact boundary union; optional historical date pairs use the same AOI. Optional asset exposure is point-to-asset distance within configured kilometers. The result means proximity to a satellite active-fire detection; it is not a fire perimeter, burned area, confirmed asset impact or proof of no fire. A burned-area product remains separate work.
 
 ### Nighttime lights and human-activity context
 
@@ -38,7 +38,7 @@ Source-feature IDs and observed source identifiers are stable. Raster-based popu
 
 ## Explicitly outstanding
 
-The current implementation does not produce standalone CHIRPS/ERA5 rainfall anomaly indicators, reusable terrain/drainage/flow-accumulation products, Landsat LST composites, MODIS/Copernicus burned-area outputs, verified feeder topology, scientific criticality/vulnerability/resilience scores, or validated intervention benefits. Black Marble acquisition still requires an Earthdata token and manifest-selected periods; no live radiance outputs are claimed until an authenticated run succeeds. Kenya-specific precision/recall/IoU requires compatible reference labels and has not been performed.
+The current implementation does not produce standalone CHIRPS/ERA5 rainfall anomaly indicators, reusable terrain/drainage/flow-accumulation products, Landsat LST composites, MODIS/Copernicus burned-area outputs, verified feeder topology, scientific criticality/vulnerability/resilience scores, or validated intervention benefits. Black Marble accepts `LAAD_TOKEN_NASA` or `NASA_EARTHDATA_TOKEN` and still requires manifest-selected periods; no live radiance outputs are claimed until an authenticated run succeeds. Kenya-specific precision/recall/IoU requires compatible reference labels and has not been performed.
 
 ## Status meanings
 

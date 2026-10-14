@@ -51,3 +51,9 @@ def missing_asset_keys() -> list[str]:
 def database_url() -> str:
     return (os.getenv("DB_URL", "").strip() or os.getenv("DATABASE_URL", "").strip()
             or os.getenv("SUPABASE_DB_URL", "").strip())
+
+
+def nasa_earthdata_token() -> str:
+    """Accept the project token name already used in the operator's .env."""
+    return (os.getenv("NASA_EARTHDATA_TOKEN", "").strip()
+            or os.getenv("LAAD_TOKEN_NASA", "").strip())

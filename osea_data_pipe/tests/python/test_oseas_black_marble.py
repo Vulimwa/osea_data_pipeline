@@ -1,9 +1,15 @@
+import os
+import tempfile
 import unittest
 from datetime import date
+from pathlib import Path
+from unittest.mock import patch
 
+import geopandas as gpd
 import pandas as pd
+from shapely.geometry import Point
 
-from scripts.ingest_viirs_black_marble import month_dates, summarize_extract
+from scripts.ingest_viirs_black_marble import acquire_and_summarize, month_dates, summarize_extract
 
 
 class BlackMarbleContractTests(unittest.TestCase):
@@ -35,6 +41,33 @@ class BlackMarbleContractTests(unittest.TestCase):
         frame = pd.DataFrame([{"zone_key": "admin:1", "wrong_date": "2024-01-01", "wrong_value": 3}])
         with self.assertRaisesRegex(ValueError, "schema is unsupported"):
             summarize_extract(frame, [date(2024, 1, 1)])
+
+    def test_monthly_summaries_resume_from_checkpoints_without_reacquisition(self):
+        zones = gpd.GeoDataFrame({"zone_key": ["admin:1", "asset:1"]},
+                                 geometry=[Point(37.0, -1.0), Point(37.1, -1.1)], crs="EPSG:4326")
+        with tempfile.TemporaryDirectory() as temporary, patch.dict(os.environ, {
+            "OSEAS_NTL_BASELINE_START_MONTH": "2012-01",
+            "OSEAS_NTL_BASELINE_END_MONTH": "2012-01",
+        }):
+            def fake_extract(_gdf, *, date_range, output_directory, **_kwargs):
+                return pd.DataFrame([
+                    {"zone_key": "admin:1", "date": date_range[0], "ntl_mean": 0.0, "ntl_count": 8},
+                    {"zone_key": "asset:1", "date": date_range[0], "ntl_mean": 2.5, "ntl_count": 4},
+                ])
+
+            with patch("blackmarble.bm_extract", side_effect=fake_extract) as extract:
+                first = acquire_and_summarize(zones, "2024-01", "2024-01", "test-token", Path(temporary))
+                self.assertEqual(extract.call_count, 2)
+            self.assertEqual(first["features"][0]["recent"]["median_radiance"], 0.0)
+            self.assertEqual(first["features"][0]["baseline"]["median_radiance"], 0.0)
+            self.assertTrue((Path(temporary) / "monthly_checkpoints" / "202401.json").is_file())
+            self.assertTrue((Path(temporary) / "monthly_checkpoints" / "201201.json").is_file())
+            self.assertEqual(list((Path(temporary) / "tile_cache").iterdir()), [])
+
+            with patch("blackmarble.bm_extract", side_effect=AssertionError("checkpoint should avoid retrieval")):
+                resumed = acquire_and_summarize(zones, "2024-01", "2024-01", "test-token", Path(temporary))
+            self.assertEqual(resumed["content_sha256"], first["content_sha256"])
+            self.assertEqual(resumed["features"], first["features"])
 
 
 if __name__ == "__main__":

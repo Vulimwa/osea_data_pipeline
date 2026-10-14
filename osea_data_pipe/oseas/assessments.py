@@ -39,7 +39,8 @@ def _system_class_counts(by_type: dict[str, int]) -> dict[str, int]:
     return counts
 
 
-def assess_assets(connection: Any, *, batch_size: int = 500) -> dict[str, int | str]:
+def assess_assets(connection: Any, *, batch_size: int = 500,
+                  connection_dsn: str | None = None) -> dict[str, int | str]:
     """Persist non-fabricated asset assessments, idempotent by input evidence hash.
 
     This deliberately withholds numeric criticality, vulnerability and resilience
@@ -50,6 +51,8 @@ def assess_assets(connection: Any, *, batch_size: int = 500) -> dict[str, int | 
         raise ValueError("batch_size must be positive")
     run_id = None
     method = METHOD_VERSION
+    session_started = time.monotonic()
+    owns_connection = False
     counts = {"assets_processed": 0, "criticality_assessments": 0, "dependency_assessments": 0,
               "vulnerability_assessments": 0, "resilience_assessments": 0, "intervention_candidates": 0,
               "ward_vulnerability_summaries": 0, "county_vulnerability_summaries": 0}
@@ -241,6 +244,26 @@ def assess_assets(connection: Any, *, batch_size: int = 500) -> dict[str, int | 
                     "batch_size": batch_size}), run_id))
             connection.commit()
             print(f"Assessment progress: assets={counts['assets_processed']}/{total_assets}; criticality={counts['criticality_assessments']}; vulnerability={counts['vulnerability_assessments']}; resilience={counts['resilience_assessments']}; interventions={counts['intervention_candidates']}; elapsed={elapsed:.0f}s; eta={eta:.0f}s", flush=True)
+            # Supabase's transaction pooler can drop long-lived client sessions.
+            # Every batch is committed and checkpointed before refreshing, so
+            # reconnecting never replays an uncommitted national-sized unit.
+            if connection_dsn and time.monotonic() - session_started >= 45:
+                with connection.cursor() as cur:
+                    cur.execute("SELECT pg_advisory_unlock(hashtext(%s))", ("oseas_evidence_gated_assessments",))
+                connection.commit()
+                connection.close()
+                import psycopg
+                connection = psycopg.connect(connection_dsn, prepare_threshold=None, connect_timeout=15,
+                    options="-c statement_timeout=120000", application_name="oseas-evidence-assessments")
+                owns_connection = True
+                with connection.cursor() as cur:
+                    cur.execute("SELECT pg_try_advisory_lock(hashtext(%s))", ("oseas_evidence_gated_assessments",))
+                    acquired = cur.fetchone()[0]
+                if not acquired:
+                    connection.close()
+                    raise RuntimeError("Another OSEAS evidence assessment run became active during connection refresh")
+                session_started = time.monotonic()
+                print("Assessment database session refreshed after committed checkpoint", flush=True)
         print("Assessment progress: aggregating current evidence by ward and county", flush=True)
         with connection.cursor() as cur:
             cur.execute("""SELECT u.id::text,u.unit_level,
@@ -275,6 +298,7 @@ def assess_assets(connection: Any, *, batch_size: int = 500) -> dict[str, int | 
             asset_type_counts: dict[str, dict[str, int]] = {}
             for unit_id, asset_type, asset_count in cur.fetchall():
                 asset_type_counts.setdefault(unit_id, {})[asset_type] = asset_count
+            summaries_by_level: dict[str, list[tuple[Any, ...]]] = {"ward": [], "county": []}
             for unit_id, level, assigned, vulnerability_rows, measured, exposed, unknown, period_start, period_end in unit_rows:
                 hazard_counts = hazards_by_unit.get(unit_id, {})
                 status = "not_assessed" if assigned == 0 else ("partial" if measured > 0 else "unknown")
@@ -291,17 +315,20 @@ def assess_assets(connection: Any, *, batch_size: int = 500) -> dict[str, int | 
                     "verified service dependencies or served population", "calibrated vulnerability normalization"],
                   "interpretation": "Administrative screening summary of stored asset evidence; it is not an outage probability or validated vulnerability score."}
                 summary_id = _stable_id(f"{level}_vulnerability_summary", unit_id, "current")
-                target = "ward_vulnerability_summary" if level == "ward" else "county_vulnerability_summary"
-                cur.execute(f"""INSERT INTO {target}
-                  (id,{level}_id,assessment_run_id,period_start,period_end,summary_status,asset_counts,hazard_counts,confidence,provenance,created_at)
-                  VALUES (%s,%s,%s,%s,%s,%s,%s::jsonb,%s::jsonb,NULL,%s::jsonb,NOW())
-                  ON CONFLICT(id) DO UPDATE SET assessment_run_id=EXCLUDED.assessment_run_id,
-                    period_start=EXCLUDED.period_start,period_end=EXCLUDED.period_end,summary_status=EXCLUDED.summary_status,
-                    asset_counts=EXCLUDED.asset_counts,hazard_counts=EXCLUDED.hazard_counts,
-                    provenance=EXCLUDED.provenance,created_at=NOW()""",
-                  (summary_id, unit_id, run_id, period_start, period_end, status,
-                   _canonical(asset_counts), _canonical(hazard_counts), _canonical(provenance)))
-                counts[f"{level}_vulnerability_summaries"] += 1
+                summaries_by_level[level].append((summary_id, unit_id, run_id, period_start, period_end,
+                  status, _canonical(asset_counts), _canonical(hazard_counts), _canonical(provenance)))
+            print(f"Assessment aggregation: prepared ward={len(summaries_by_level['ward'])}; county={len(summaries_by_level['county'])}; persisting in batches", flush=True)
+            for level, target in (("ward", "ward_vulnerability_summary"), ("county", "county_vulnerability_summary")):
+                summary_rows = summaries_by_level[level]
+                if summary_rows:
+                    cur.executemany(f"""INSERT INTO {target}
+                      (id,{level}_id,assessment_run_id,period_start,period_end,summary_status,asset_counts,hazard_counts,confidence,provenance,created_at)
+                      VALUES (%s,%s,%s,%s,%s,%s,%s::jsonb,%s::jsonb,NULL,%s::jsonb,NOW())
+                      ON CONFLICT(id) DO UPDATE SET assessment_run_id=EXCLUDED.assessment_run_id,
+                        period_start=EXCLUDED.period_start,period_end=EXCLUDED.period_end,summary_status=EXCLUDED.summary_status,
+                        asset_counts=EXCLUDED.asset_counts,hazard_counts=EXCLUDED.hazard_counts,
+                        provenance=EXCLUDED.provenance,created_at=NOW()""", summary_rows)
+                    counts[f"{level}_vulnerability_summaries"] += len(summary_rows)
         connection.commit()
         with connection.cursor() as cur:
             cur.execute("UPDATE ingestion_runs SET status='completed',finished_at=NOW(),metadata=metadata||%s::jsonb WHERE id=%s",
@@ -320,7 +347,8 @@ def assess_assets(connection: Any, *, batch_size: int = 500) -> dict[str, int | 
             # committed batches and mark the run resumable using a fresh session.
             try:
                 import psycopg
-                with psycopg.connect(connection.info.dsn, prepare_threshold=None, connect_timeout=15,
+                recovery_dsn = connection_dsn or connection.info.dsn
+                with psycopg.connect(recovery_dsn, prepare_threshold=None, connect_timeout=15,
                                      options="-c statement_timeout=30000",
                                      application_name="oseas-evidence-assessments-recovery") as recovery:
                     with recovery.cursor() as cur:
@@ -338,4 +366,9 @@ def assess_assets(connection: Any, *, batch_size: int = 500) -> dict[str, int | 
                 connection.commit()
         except Exception:
             pass
+        if owns_connection:
+            try:
+                connection.close()
+            except Exception:
+                pass
     return {**counts, "run_id": str(run_id), "status": "completed"}

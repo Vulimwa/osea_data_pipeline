@@ -21,6 +21,8 @@ Set the real values in `.env`. For service-account authentication, set `GEE_SERV
 
 The asset references supplied for OSEAS were added to the private `.env` as `projects/osea-hack/assets/osea/<asset>`. Run the audit to verify these exact IDs and replace any that do not resolve. `GEE_PROJECT_ID` controls Earth Engine initialization; do not assume it is the same project that owns the assets.
 
+For NASA sources, `NASA_FIRMS_MAP_KEY` holds the server-side FIRMS key. Latest-day ingestion defaults to `VIIRS_SNPP_NRT`; the request envelope comes from ingested Kenya county boundaries, and detections are filtered to their exact union. Leave both `OSEAS_FIRE_START_DATE` and `OSEAS_FIRE_END_DATE` empty for the latest day, or set both for historical data. Run `npm run oseas:fire` to update fire evidence without repeating other pipeline stages. Black Marble accepts `LAAD_TOKEN_NASA` as the NASA Earthdata token alias (or `NASA_EARTHDATA_TOKEN`).
+
 ## Database
 
 Open [`../database/schema.sql`](../database/schema.sql) and run it in Supabase SQL Editor. This is the only schema installation step. It creates OSEAS tables and indexes additively and does not delete old or unrelated database objects.

@@ -91,14 +91,14 @@ def main() -> int:
             stages.append({"stage": "asset-to-county-and-ward assignment", "status": "blocked", "reason": "source ingestion failed"})
             stages.append({"stage": "NASA POWER heat acquisition and exposure", "status": "blocked", "reason": "no configured asset inventory update completed"})
 
-        ntl_token = os.getenv("NASA_EARTHDATA_TOKEN", "").strip()
+        ntl_token = os.getenv("NASA_EARTHDATA_TOKEN", "").strip() or os.getenv("LAAD_TOKEN_NASA", "").strip()
         ntl_start = os.getenv("OSEAS_NTL_START_MONTH", "").strip()
         ntl_end = os.getenv("OSEAS_NTL_END_MONTH", "").strip()
         if ntl_token and ntl_start and ntl_end:
             run_stage("NASA VIIRS Black Marble monthly radiance and context", python_run("scripts/ingest_viirs_black_marble.py"), stages)
         else:
             stages.append({"stage": "NASA VIIRS Black Marble monthly radiance and context", "status": "blocked",
-              "reason": "NASA_EARTHDATA_TOKEN and explicitly manifest-verified OSEAS_NTL_START_MONTH/OSEAS_NTL_END_MONTH are required"})
+              "reason": "NASA_EARTHDATA_TOKEN or LAAD_TOKEN_NASA and manifest-verified OSEAS_NTL_START_MONTH/OSEAS_NTL_END_MONTH are required"})
 
         unosat_ok = run_stage("UNOSAT flood reference ingest", python_run("scripts/ingest_unosat_flood_reference.py"), stages)
 
@@ -116,11 +116,14 @@ def main() -> int:
             stages.append({"stage": "WorldPop population exposure", "status": "blocked",
                            "reason": "requires successful UNOSAT ingest and a validated WorldPop raster"})
 
-        if os.getenv("NASA_FIRMS_MAP_KEY", "").strip() and os.getenv("OSEAS_FIRE_START_DATE", "").strip() and os.getenv("OSEAS_FIRE_END_DATE", "").strip():
+        fire_key = os.getenv("NASA_FIRMS_MAP_KEY", "").strip()
+        fire_start = os.getenv("OSEAS_FIRE_START_DATE", "").strip()
+        fire_end = os.getenv("OSEAS_FIRE_END_DATE", "").strip()
+        if fire_key and (bool(fire_start) == bool(fire_end)):
             run_stage("NASA FIRMS active-fire acquisition and asset proximity", python_run("scripts/ingest_firms_fire.py"), stages)
         else:
             stages.append({"stage": "NASA FIRMS active-fire acquisition and asset proximity", "status": "blocked",
-              "reason": "NASA_FIRMS_MAP_KEY and explicit OSEAS_FIRE_START_DATE/OSEAS_FIRE_END_DATE are required"})
+              "reason": "NASA_FIRMS_MAP_KEY is required; historical dates must be supplied as a pair (leave both empty for latest NRT)"})
 
         run_stage("evidence-gated criticality, dependencies, vulnerability, resilience and intervention outputs",
                   python_run("scripts/run_evidence_assessments.py"), stages)
@@ -142,7 +145,7 @@ def main() -> int:
                   "started_at": pipeline_started_at,
                   "stages": stages,
                   "unsupported_or_unconfigured_sources": ["Landsat land-surface temperature (NASA POWER provides air temperature only)",
-                    "FIRMS acquisition is blocked without map key and dates", "burned-area products",
+                    "FIRMS acquisition is blocked without map key", "burned-area products",
                     "CHIRPS anomaly products", "reusable national terrain and drainage"],
                   "duplication_policy": "Source feature keys, raster-content assessment keys, deterministic assessment IDs and importer advisory locks; same-input outputs are upserted or ignored."}
         report_path = ROOT / "outputs" / "last_pipeline_run.json"

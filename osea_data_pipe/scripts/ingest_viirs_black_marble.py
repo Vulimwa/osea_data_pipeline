@@ -5,6 +5,8 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import gc
+import shutil
 import sys
 import uuid
 from datetime import date
@@ -13,7 +15,7 @@ from typing import Any
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
-from oseas.config import database_url  # noqa: E402
+from oseas.config import database_url, nasa_earthdata_token  # noqa: E402
 
 DATASET_KEY = "nasa_viirs_black_marble_monthly"
 METHOD = "viirs_black_marble_quality_screened_period_median_v1"
@@ -115,7 +117,7 @@ def fetch_zones(connection: Any) -> tuple[Any, dict[str, dict[str, Any]]]:
 
 def acquire_and_summarize(gdf: Any, start_month: str, end_month: str, token: str, output_dir: Path) -> dict[str, Any]:
     if not token:
-        raise RuntimeError("NASA_EARTHDATA_TOKEN is required for Black Marble VNP46A3 downloads")
+        raise RuntimeError("NASA_EARTHDATA_TOKEN (or LAAD_TOKEN_NASA) is required for Black Marble VNP46A3 downloads")
     recent_dates = month_dates(start_month, end_month)
     # The baseline is intentionally fixed and independently recorded; callers
     # can change it without changing the recent period.
@@ -130,7 +132,7 @@ def acquire_and_summarize(gdf: Any, start_month: str, end_month: str, token: str
     output_dir.mkdir(parents=True, exist_ok=True)
     common = {"product_id": "VNP46A3", "token": token, "aggfunc": ["mean", "count"],
               "variable": "NearNadir_Composite_Snow_Free", "drop_values_by_quality_flag": [1, 2, 255],
-              "check_all_tiles_exist": False, "output_directory": output_dir, "output_skip_if_exists": True}
+              "check_all_tiles_exist": True, "output_skip_if_exists": True}
     import numpy as np
     import pandas as pd
 
@@ -141,39 +143,86 @@ def acquire_and_summarize(gdf: Any, start_month: str, end_month: str, token: str
     valid_pixel_totals = np.zeros((len(zone_keys), 2), dtype=np.float64)
     valid_month_totals = np.zeros((len(zone_keys), 2), dtype=np.uint16)
     digest = hashlib.sha256()
+    zone_geometry_digest = hashlib.sha256()
     digest.update(json.dumps({"recent": [d.isoformat() for d in recent_dates],
       "baseline": [d.isoformat() for d in baseline_dates], "product": "VNP46A3 C2.0",
       "quality_flags_excluded": [1, 2, 255]}, sort_keys=True).encode())
     for zone_key, geometry in zip(zone_keys, gdf.geometry):
         digest.update(zone_key.encode())
         digest.update(bytes(geometry.wkb))
+        zone_geometry_digest.update(zone_key.encode())
+        zone_geometry_digest.update(bytes(geometry.wkb))
+    checkpoint_signature = hashlib.sha256(json.dumps({
+        "product": "VNP46A3 C2.0",
+        "recent": [d.isoformat() for d in recent_dates],
+        "baseline": [d.isoformat() for d in baseline_dates],
+        "quality_flags_excluded": [1, 2, 255],
+        "zone_geometry_sha256": zone_geometry_digest.hexdigest(),
+    }, sort_keys=True).encode()).hexdigest()
+    checkpoint_dir = output_dir / "monthly_checkpoints"
+    checkpoint_dir.mkdir(parents=True, exist_ok=True)
     # One monthly extraction at a time bounds raster and tabular working memory;
     # the numeric result matrix is fixed-size and compact even at national scale.
     for column, observation_date in enumerate(all_dates):
         period = "recent" if column < len(recent_dates) else "baseline"
         period_column = column if period == "recent" else column - len(recent_dates)
         period_total = len(recent_dates) if period == "recent" else len(baseline_dates)
-        print(f"Black Marble {period}: month {period_column + 1}/{period_total} ({observation_date:%Y-%m}); zones={len(zone_keys)}", flush=True)
-        frame = bm_extract(gdf, date_range=[observation_date], **common)
-        date_column, value_column, count_column = _extract_columns(frame)
-        frame[date_column] = pd.to_datetime(frame[date_column]).dt.date
-        frame = frame[frame[date_column] == observation_date]
-        indices = frame["zone_key"].astype(str).map(zone_index)
-        values = pd.to_numeric(frame[value_column], errors="coerce").to_numpy(dtype=np.float64)
-        counts = (pd.to_numeric(frame[count_column], errors="coerce").fillna(0).to_numpy(dtype=np.float64)
-                  if count_column else np.where(np.isfinite(values), 1.0, 0.0))
-        valid = indices.notna().to_numpy() & np.isfinite(values) & (counts > 0)
-        row_indices = indices[valid].to_numpy(dtype=np.int64)
-        radiance[row_indices, column] = values[valid].astype(np.float32)
+        checkpoint_path = checkpoint_dir / f"{observation_date:%Y%m}.json"
+        monthly_values = np.full(len(zone_keys), np.nan, dtype=np.float32)
+        monthly_counts = np.zeros(len(zone_keys), dtype=np.uint32)
+        restored = False
+        if checkpoint_path.is_file():
+            try:
+                checkpoint = json.loads(checkpoint_path.read_text(encoding="utf-8"))
+                if checkpoint.get("signature") == checkpoint_signature and checkpoint.get("date") == observation_date.isoformat():
+                    stored_values = checkpoint.get("values", {})
+                    stored_counts = checkpoint.get("pixel_counts", {})
+                    if set(stored_values) == set(zone_keys) and set(stored_counts) == set(zone_keys):
+                        monthly_values = np.asarray([np.nan if stored_values[key] is None else stored_values[key]
+                                                     for key in zone_keys], dtype=np.float32)
+                        monthly_counts = np.asarray([stored_counts[key] for key in zone_keys], dtype=np.uint32)
+                        restored = True
+            except (OSError, ValueError, TypeError, KeyError):
+                restored = False
+        print(f"Black Marble {period}: month {period_column + 1}/{period_total} ({observation_date:%Y-%m}); "
+              f"zones={len(zone_keys)}; source={'checkpoint' if restored else 'NASA LAADS'}", flush=True)
+        if not restored:
+            month_cache = output_dir / "tile_cache" / f"{observation_date:%Y%m}"
+            month_cache.mkdir(parents=True, exist_ok=True)
+            frame = bm_extract(gdf, date_range=[observation_date], output_directory=month_cache, **common)
+            date_column, value_column, count_column = _extract_columns(frame)
+            frame[date_column] = pd.to_datetime(frame[date_column]).dt.date
+            frame = frame[frame[date_column] == observation_date]
+            indices = frame["zone_key"].astype(str).map(zone_index)
+            values = pd.to_numeric(frame[value_column], errors="coerce").to_numpy(dtype=np.float64)
+            counts = (pd.to_numeric(frame[count_column], errors="coerce").fillna(0).to_numpy(dtype=np.float64)
+                      if count_column else np.where(np.isfinite(values), 1.0, 0.0))
+            valid = indices.notna().to_numpy() & np.isfinite(values) & (counts > 0)
+            row_indices = indices[valid].to_numpy(dtype=np.int64)
+            monthly_values[row_indices] = values[valid].astype(np.float32)
+            monthly_counts[row_indices] = np.minimum(counts[valid], np.iinfo(np.uint32).max).astype(np.uint32)
+            # Save each month atomically so a stopped machine can resume without
+            # re-downloading already summarized full-resolution tiles.
+            checkpoint = {"signature": checkpoint_signature, "date": observation_date.isoformat(),
+              "values": {key: (float(value) if np.isfinite(value) else None)
+                         for key, value in zip(zone_keys, monthly_values)},
+              "pixel_counts": {key: int(value) for key, value in zip(zone_keys, monthly_counts)}}
+            temporary_path = checkpoint_path.with_suffix(".json.tmp")
+            temporary_path.write_text(json.dumps(checkpoint, separators=(",", ":")), encoding="utf-8")
+            temporary_path.replace(checkpoint_path)
+            del frame
+            gc.collect()
+            shutil.rmtree(month_cache, ignore_errors=True)
+            if month_cache.exists() and any(month_cache.iterdir()):
+                print(f"Black Marble cleanup pending for {observation_date:%Y-%m}; source cache remains at {month_cache}", flush=True)
+        valid = np.isfinite(monthly_values) & (monthly_counts > 0)
+        row_indices = np.flatnonzero(valid)
+        radiance[row_indices, column] = monthly_values[valid]
         period_index = 0 if period == "recent" else 1
-        valid_pixel_totals[row_indices, period_index] += counts[valid]
+        valid_pixel_totals[row_indices, period_index] += monthly_counts[valid]
         valid_month_totals[row_indices, period_index] += 1
         # Ordered by sorted `zone_key`; hashes include every observed value and
         # valid-pixel count so changed monthly inputs cannot reuse old output IDs.
-        monthly_values = np.full(len(zone_keys), np.nan, dtype=np.float32)
-        monthly_counts = np.zeros(len(zone_keys), dtype=np.uint32)
-        monthly_values[row_indices] = values[valid].astype(np.float32)
-        monthly_counts[row_indices] = np.minimum(counts[valid], np.iinfo(np.uint32).max).astype(np.uint32)
         digest.update(observation_date.isoformat().encode())
         digest.update(monthly_values.tobytes())
         digest.update(monthly_counts.tobytes())
@@ -317,13 +366,13 @@ def persist(connection: Any, gdf: Any, zone_metadata: dict[str, dict[str, Any]],
 def main() -> int:
     start_month = os.getenv("OSEAS_NTL_START_MONTH", "").strip()
     end_month = os.getenv("OSEAS_NTL_END_MONTH", "").strip()
-    token = os.getenv("NASA_EARTHDATA_TOKEN", "").strip()
+    token = nasa_earthdata_token()
     if not start_month or not end_month:
         raise RuntimeError("Set OSEAS_NTL_START_MONTH and OSEAS_NTL_END_MONTH only after reviewing the NASA LAADS product manifest for complete Kenya months")
     if len(month_dates(start_month, end_month)) != 36:
         raise RuntimeError("OSEAS_NTL_START_MONTH and OSEAS_NTL_END_MONTH must select exactly 36 inclusive months")
     if not token:
-        raise RuntimeError("NASA_EARTHDATA_TOKEN is required for NASA LAADS VNP46A3 retrieval")
+        raise RuntimeError("NASA_EARTHDATA_TOKEN (or LAAD_TOKEN_NASA) is required for NASA LAADS VNP46A3 retrieval")
     url = database_url()
     if not url:
         raise RuntimeError("DB_URL, DATABASE_URL, or SUPABASE_DB_URL is required")
