@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import time
 import uuid
 from typing import Any
 
@@ -47,7 +48,7 @@ def assess_assets(connection: Any, *, batch_size: int = 500) -> dict[str, int | 
     """
     if batch_size < 1:
         raise ValueError("batch_size must be positive")
-    run_id = uuid.uuid4()
+    run_id = None
     method = METHOD_VERSION
     counts = {"assets_processed": 0, "criticality_assessments": 0, "dependency_assessments": 0,
               "vulnerability_assessments": 0, "resilience_assessments": 0, "intervention_candidates": 0,
@@ -56,11 +57,37 @@ def assess_assets(connection: Any, *, batch_size: int = 500) -> dict[str, int | 
         cur.execute("SELECT pg_try_advisory_lock(hashtext(%s))", ("oseas_evidence_gated_assessments",))
         if not cur.fetchone()[0]:
             raise RuntimeError("Another OSEAS evidence assessment run is active")
-        cur.execute("INSERT INTO ingestion_runs (id,pipeline_name,status,metadata) VALUES (%s,'oseas_evidence_gated_assessments','running',%s::jsonb)",
-                    (run_id, json.dumps({"method": method, "batch_size": batch_size})))
+        cur.execute("""SELECT id FROM ingestion_runs WHERE pipeline_name='oseas_evidence_gated_assessments'
+          AND status IN ('running','partial') AND metadata->>'method'=%s ORDER BY started_at DESC LIMIT 1""", (method,))
+        previous = cur.fetchone()
+        if previous:
+            run_id = previous[0]
+            cur.execute("""SELECT count(DISTINCT energy_asset_id),max(energy_asset_id::text)
+              FROM asset_vulnerability_assessments WHERE processing_run_id=%s""", (run_id,))
+            counts["assets_processed"], last_asset_id = cur.fetchone()
+            for key, table in (("criticality_assessments", "asset_criticality_assessments"),
+                               ("dependency_assessments", "service_dependency_assessments"),
+                               ("vulnerability_assessments", "asset_vulnerability_assessments"),
+                               ("resilience_assessments", "grid_resilience_assessments"),
+                               ("intervention_candidates", "intervention_scenarios")):
+                cur.execute(f"SELECT count(*) FROM {table} WHERE processing_run_id=%s", (run_id,))
+                counts[key] = cur.fetchone()[0]
+            last_asset_id = last_asset_id or "00000000-0000-0000-0000-000000000000"
+            cur.execute("""UPDATE ingestion_runs SET status='running',finished_at=NULL,error_message=NULL,
+              metadata=metadata||%s::jsonb WHERE id=%s""", (json.dumps({"batch_size": batch_size,
+                "assets_processed": counts["assets_processed"], "last_asset_id": last_asset_id}), run_id))
+        else:
+            run_id = uuid.uuid4()
+            last_asset_id = "00000000-0000-0000-0000-000000000000"
+            cur.execute("INSERT INTO ingestion_runs (id,pipeline_name,status,metadata) VALUES (%s,'oseas_evidence_gated_assessments','running',%s::jsonb)",
+                        (run_id, json.dumps({"method": method, "batch_size": batch_size})))
     connection.commit()
     try:
-        last_asset_id = "00000000-0000-0000-0000-000000000000"
+        assessment_started = time.monotonic()
+        with connection.cursor() as cur:
+            cur.execute("SELECT count(*) FROM energy_assets")
+            total_assets = cur.fetchone()[0]
+        resumed_assets = counts["assets_processed"]
         asset_query = """
               SELECT a.id::text,a.asset_type,a.name,a.voltage_kv,a.source_properties,
                      ST_AsGeoJSON(a.geom) AS geom_json,
@@ -205,7 +232,15 @@ def assess_assets(connection: Any, *, batch_size: int = 500) -> dict[str, int | 
                     'unranked','candidate',%s,%s::jsonb,%s::jsonb,NULL,%s,NOW()) ON CONFLICT (id) DO NOTHING""", intervention_rows)
                 counts["intervention_candidates"] += max(cur.rowcount, 0)
             connection.commit()
-            print(f"Assessment progress: assets={counts['assets_processed']}; criticality={counts['criticality_assessments']}; vulnerability={counts['vulnerability_assessments']}; resilience={counts['resilience_assessments']}; interventions={counts['intervention_candidates']}", flush=True)
+            elapsed = time.monotonic() - assessment_started
+            rate = (counts["assets_processed"] - resumed_assets) / max(elapsed, 0.001)
+            eta = max(total_assets - counts["assets_processed"], 0) / max(rate, 0.001)
+            with connection.cursor() as checkpoint:
+                checkpoint.execute("UPDATE ingestion_runs SET metadata=metadata||%s::jsonb WHERE id=%s",
+                  (json.dumps({"assets_processed": counts["assets_processed"], "last_asset_id": last_asset_id,
+                    "batch_size": batch_size}), run_id))
+            connection.commit()
+            print(f"Assessment progress: assets={counts['assets_processed']}/{total_assets}; criticality={counts['criticality_assessments']}; vulnerability={counts['vulnerability_assessments']}; resilience={counts['resilience_assessments']}; interventions={counts['intervention_candidates']}; elapsed={elapsed:.0f}s; eta={eta:.0f}s", flush=True)
         print("Assessment progress: aggregating current evidence by ward and county", flush=True)
         with connection.cursor() as cur:
             cur.execute("""SELECT u.id::text,u.unit_level,
@@ -273,14 +308,34 @@ def assess_assets(connection: Any, *, batch_size: int = 500) -> dict[str, int | 
                         (_canonical(counts), run_id))
         connection.commit()
     except Exception as error:
-        connection.rollback()
-        with connection.cursor() as cur:
-            cur.execute("UPDATE ingestion_runs SET status='failed',finished_at=NOW(),error_message=%s,metadata=metadata||%s::jsonb WHERE id=%s",
-                        (str(error)[:4000], _canonical(counts), run_id))
-        connection.commit()
+        status = "partial" if counts["assets_processed"] else "failed"
+        try:
+            connection.rollback()
+            with connection.cursor() as cur:
+                cur.execute("UPDATE ingestion_runs SET status=%s,finished_at=NOW(),error_message=%s,metadata=metadata||%s::jsonb WHERE id=%s",
+                            (status, str(error)[:4000], _canonical(counts), run_id))
+            connection.commit()
+        except Exception:
+            # Supavisor can drop a long-lived client connection. Keep all prior
+            # committed batches and mark the run resumable using a fresh session.
+            try:
+                import psycopg
+                with psycopg.connect(connection.info.dsn, prepare_threshold=None, connect_timeout=15,
+                                     options="-c statement_timeout=30000",
+                                     application_name="oseas-evidence-assessments-recovery") as recovery:
+                    with recovery.cursor() as cur:
+                        cur.execute("UPDATE ingestion_runs SET status=%s,finished_at=NOW(),error_message=%s,metadata=metadata||%s::jsonb WHERE id=%s AND status='running'",
+                                    (status, str(error)[:4000], _canonical(counts), run_id))
+                    recovery.commit()
+            except Exception:
+                pass
         raise
     finally:
-        with connection.cursor() as cur:
-            cur.execute("SELECT pg_advisory_unlock(hashtext(%s))", ("oseas_evidence_gated_assessments",))
-        connection.commit()
+        try:
+            if not connection.closed:
+                with connection.cursor() as cur:
+                    cur.execute("SELECT pg_advisory_unlock(hashtext(%s))", ("oseas_evidence_gated_assessments",))
+                connection.commit()
+        except Exception:
+            pass
     return {**counts, "run_id": str(run_id), "status": "completed"}

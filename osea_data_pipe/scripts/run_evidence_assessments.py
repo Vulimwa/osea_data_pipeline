@@ -30,7 +30,7 @@ def main() -> int:
         print("Evidence assessment: reading current assets, measured exposures and explicitly verified service links", flush=True)
         # Keep each geospatial read/write transaction small enough for the
         # Supabase pooler. Stable evidence IDs make a retry safe after a drop.
-        result = assess_assets(connection, batch_size=100)
+        result = assess_assets(connection, batch_size=250)
     print(json.dumps(result, indent=2))
     return 0
 
