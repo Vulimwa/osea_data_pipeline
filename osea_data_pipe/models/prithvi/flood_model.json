@@ -1,0 +1,12 @@
+{
+  "model_id": "ibm-nasa-geospatial/Prithvi-EO-2.0-300M-TL-Sen1Floods11",
+  "model_revision": "91ce9d38086a80b078a192b374df758b8855b732",
+  "checkpoint": "Prithvi-EO-V2-300M-TL-Sen1Floods11.pt",
+  "license": "Apache-2.0",
+  "task": "Sentinel-2 flood-water segmentation",
+  "sensor": "Sentinel-2 L1C",
+  "bands": ["B2", "B3", "B4", "B8A", "B11", "B12"],
+  "classes": {"0": "background_or_nonwater", "1": "water_or_flood", "-1": "nodata_cloud"},
+  "training_reference": "Sen1Floods11",
+  "kenya_validation": "not_evaluated"
+}

@@ -1,0 +1,6 @@
+{
+  "name": "OSEAS Climate Risk Pipeline",
+  "description": "Kenya energy infrastructure ingestion, climate hazard screening, and geospatial evidence API.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
