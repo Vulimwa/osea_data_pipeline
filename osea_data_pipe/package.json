@@ -25,6 +25,8 @@
     "oseas:population:admin-preview": "python scripts/run_worldpop_population_exposure.py --include-administrative-units",
     "oseas:population:persist": "python scripts/run_worldpop_population_exposure.py --persist",
     "oseas:assessments": "python scripts/run_evidence_assessments.py",
+    "oseas:heat": "python scripts/ingest_nasa_power_heat.py",
+    "oseas:fire": "python scripts/ingest_firms_fire.py",
     "oseas:pipeline": "python scripts/run_oseas_pipeline.py",
     "oseas:wind:sync": "python scripts/sync_global_wind_atlas.py",
     "oseas:flood:screen": "python scripts/run_flood_screen.py",

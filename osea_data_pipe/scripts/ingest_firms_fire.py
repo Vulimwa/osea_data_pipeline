@@ -1,4 +1,4 @@
-"""Acquire NASA FIRMS VIIRS active-fire detections and create proximity evidence."""
+﻿"""Acquire NASA FIRMS VIIRS active-fire detections and create proximity evidence."""
 
 from __future__ import annotations
 
@@ -55,7 +55,7 @@ def acquire(start: date, end: date, bbox: str, source: str, map_key: str) -> dic
             if not (coordinates[0] <= lon <= coordinates[2] and coordinates[1] <= lat <= coordinates[3]):
                 continue
             records.append({"lat": lat, "lon": lon, "date": acquired.isoformat(),
-              "time": str(row.get("acq_time", "")), "satellite": row.get("satellite"),
+              "time": str(row.get("acq_time", "")).zfill(4), "satellite": row.get("satellite"),
               "instrument": row.get("instrument"), "confidence_category": row.get("confidence"),
               "frp_mw": _number(row.get("frp")), "scan_km": _number(row.get("scan")),
               "track_km": _number(row.get("track")), "daynight": row.get("daynight"),
@@ -104,7 +104,7 @@ def persist(connection: Any, data: dict[str, Any], distance_km: float) -> dict[s
               "acquisitionDate": record["date"], "acquisitionTimeUtc": record["time"],
               "sourceConfidenceCategory": record["confidence_category"], "frpMw": record["frp_mw"],
               "scanKm": record["scan_km"], "trackKm": record["track_km"], "dayNight": record["daynight"],
-              "sourceVersion": record["version"], "method": METHOD,
+              "sourceVersion": record["version"], "inputSha256": data["sha256"], "method": METHOD,
               "limitation": "Active-fire detection point; not a fire perimeter and not evidence of asset damage."}
             rows.append((event_id, record, metadata))
         with connection.cursor() as cur:
@@ -121,8 +121,8 @@ def persist(connection: Any, data: dict[str, Any], distance_km: float) -> dict[s
                 print(f"FIRMS persistence: detection points={min(offset + len(batch), len(rows))}/{len(rows)}", flush=True)
             cur.execute("""INSERT INTO fire_events(hazard_event_id,fire_status,confidence,burned_area_ha,quality)
               SELECT h.id,'active_detection',NULL,NULL,h.metadata FROM hazard_events h
-              WHERE h.processing_run_id=%s AND h.hazard_type='fire'
-              ON CONFLICT(hazard_event_id) DO NOTHING""", (run_id,))
+              WHERE h.metadata->>'inputSha256'=%s AND h.hazard_type='fire'
+              ON CONFLICT(hazard_event_id) DO NOTHING""", (data["sha256"],))
             cur.execute("""INSERT INTO asset_hazard_exposure
               (id,energy_asset_id,hazard_event_id,hazard_type,assessment_period_start,assessment_period_end,
                exposure_status,distance_m,evidence_kind,confidence,provenance,processing_run_id)
@@ -132,10 +132,10 @@ def persist(connection: Any, data: dict[str, Any], distance_km: float) -> dict[s
                   'confidenceCategory',(h.metadata->>'sourceConfidenceCategory'),
                   'limitations',jsonb_build_array('Active detections are not perimeters.','Proximity is not damage or outage evidence.')),
                 %s
-              FROM energy_assets a JOIN hazard_events h ON h.processing_run_id=%s AND h.hazard_type='fire'
+              FROM energy_assets a JOIN hazard_events h ON h.metadata->>'inputSha256'=%s AND h.hazard_type='fire'
               WHERE ST_DWithin(a.geom::geography,h.geom::geography,%s)
               ON CONFLICT(id) DO NOTHING""",
-              (data["start"], data["end"], METHOD, distance_km, run_id, run_id, distance_km * 1000))
+              (data["start"], data["end"], METHOD, distance_km, run_id, data["sha256"], distance_km * 1000))
             exposure_count = cur.rowcount
             cur.execute("""INSERT INTO dataset_versions(dataset_key,source_reference,source_version,checksum,retrieved_at,
               observation_start,observation_end,feature_count,metadata,processing_run_id)
@@ -143,6 +143,18 @@ def persist(connection: Any, data: dict[str, Any], distance_km: float) -> dict[s
               (SELECT 1 FROM dataset_versions WHERE dataset_key=%s AND checksum=%s)""",
               (DATASET_KEY, source_reference, data["source"], data["sha256"], data["start"], data["end"],
                len(rows), json.dumps({"method": METHOD, "bbox": data["bbox"]}), run_id, DATASET_KEY, data["sha256"]))
+            west, south, east, north = [float(part) for part in data["bbox"].split(",")]
+            footprint = json.dumps({"type": "Polygon", "coordinates": [[[west,south],[east,south],[east,north],[west,north],[west,south]]]})
+            cur.execute("""INSERT INTO spatial_coverage_assessments
+              (dataset_key,processing_run_id,reporting_unit_level,hazard_type,evidence_kind,observation_start,observation_end,
+               coverage_status,observation_footprint,quality_mask,validation_status,limitations,provenance)
+              VALUES (%s,%s,'national','wildfire','observed',%s,%s,'partially_assessed',
+                ST_SetSRID(ST_GeomFromGeoJSON(%s),4326),%s::jsonb,'not_validated',%s::jsonb,%s::jsonb)""",
+              (DATASET_KEY, run_id, data["start"], data["end"], footprint,
+               json.dumps({"detectionPointsReturned": len(rows), "sensor": data["source"], "bbox": data["bbox"]}),
+               json.dumps(["Active-fire detections are not a complete fire perimeter or proof of no fire.",
+                 "Detection absence may reflect cloud, overpass timing, sensor limits, or product availability."]),
+               json.dumps({"method": METHOD, "inputSha256": data["sha256"]})))
             cur.execute("INSERT INTO data_quality_checks(run_id,dataset_key,check_name,status,details) VALUES (%s,%s,'firms_acquisition_and_detection_quality','warning',%s::jsonb)",
               (run_id, DATASET_KEY, json.dumps({"active_detection_count": len(rows), "asset_proximity_rows": exposure_count,
                 "source": data["source"], "method": METHOD, "burnedAreaPerimeter": "not produced"})))
@@ -170,7 +182,7 @@ def main() -> int:
     if not start_raw or not end_raw:
         raise RuntimeError("Set OSEAS_FIRE_START_DATE and OSEAS_FIRE_END_DATE (YYYY-MM-DD) to define the FIRMS acquisition window")
     start, end = date.fromisoformat(start_raw), date.fromisoformat(end_raw)
-    bbox = os.getenv("OSEAS_FIRE_BBOX", "-180,-90,180,180").strip()
+    bbox = os.getenv("OSEAS_FIRE_BBOX", "33.5,-5.1,42.0,5.1").strip()
     source = os.getenv("OSEAS_FIRE_SENSOR", "VIIRS_SNPP_SP").strip()
     distance_km = float(os.getenv("OSEAS_FIRE_PROXIMITY_KM", "5"))
     data = acquire(start, end, bbox, source, map_key)
@@ -178,7 +190,7 @@ def main() -> int:
     if not url:
         raise RuntimeError("DB_URL, DATABASE_URL, or SUPABASE_DB_URL is required")
     import psycopg
-    with psycopg.connect(url, connect_timeout=15, options="-c statement_timeout=120000", application_name="oseas-firms-fire") as connection:
+    with psycopg.connect(url, prepare_threshold=None, connect_timeout=15, options="-c statement_timeout=120000", application_name="oseas-firms-fire") as connection:
         result = persist(connection, data, distance_km)
     print(json.dumps(result, indent=2))
     return 0

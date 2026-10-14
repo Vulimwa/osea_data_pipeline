@@ -63,6 +63,7 @@ const getReadiness = asyncRoute(async (_req, res) => {
   let tableStatus = {};
   let sourceCounts = {};
   let populationStatus = { status: 'not_assessed', assessmentRows: 0 };
+  let environmentalStatus = { heatObservations: 0, fireDetections: 0 };
   if (database.connected) {
     const result = await db.query(`
       SELECT to_regclass('public.energy_assets') IS NOT NULL AS assets,
@@ -74,7 +75,8 @@ const getReadiness = asyncRoute(async (_req, res) => {
              to_regclass('public.flood_reference_features') IS NOT NULL AS flood_reference,
              to_regclass('public.spatial_coverage_assessments') IS NOT NULL AS coverage,
              to_regclass('public.population_exposure_assessments') IS NOT NULL AS population_exposure,
-             to_regclass('public.grid_resilience_assessments') IS NOT NULL AS grid_resilience
+             to_regclass('public.grid_resilience_assessments') IS NOT NULL AS grid_resilience,
+             to_regclass('public.climate_observations') IS NOT NULL AS climate_observations
     `);
     tableStatus = result.rows[0];
     const sources = await db.query(`SELECT status,started_at,finished_at,metadata FROM ingestion_runs WHERE pipeline_name='oseas_earth_engine_ingest' ORDER BY started_at DESC LIMIT 1`);
@@ -96,9 +98,17 @@ const getReadiness = asyncRoute(async (_req, res) => {
              (SELECT count(*)::int FROM administrative_units WHERE unit_level='ward') AS wards,
              (SELECT count(*)::int FROM administrative_units WHERE unit_level='county') AS counties,
              (SELECT count(*)::int FROM hydrography_features) AS hydrography_features,
-             (SELECT count(*)::int FROM flood_reference_features) AS flood_reference_features
+             (SELECT count(*)::int FROM flood_reference_features) AS flood_reference_features,
+             (SELECT count(*)::int FROM climate_observations WHERE variable='T2M_MAX') AS heat_observations,
+             (SELECT count(*)::int FROM hazard_events WHERE hazard_type='fire') AS fire_detections
     `).catch(() => ({ rows: [{}] }));
     sourceCounts = counts.rows[0];
+    environmentalStatus = {
+      heat: { status: Number(sourceCounts.heat_observations || 0) > 0 ? 'available' : 'not_assessed',
+        dailyObservations: Number(sourceCounts.heat_observations || 0) },
+      fire: { status: Number(sourceCounts.fire_detections || 0) > 0 ? 'available' : 'not_assessed',
+        activeDetectionPoints: Number(sourceCounts.fire_detections || 0) }
+    };
     const population = await db.query(`SELECT count(*)::int AS assessment_rows,
         max(created_at) AS latest_assessment_at,
         count(*) FILTER (WHERE assessment_status='partial')::int AS partial_rows,
@@ -122,6 +132,7 @@ const getReadiness = asyncRoute(async (_req, res) => {
       database: database.connected ? { status: 'ok', postgisVersion: database.postgis_version } : { status: 'unavailable' },
       sourceIngestion: sourceRun ? { status: sourceRun.status, startedAt: sourceRun.started_at, finishedAt: sourceRun.finished_at } : { status: 'not_run' },
       sourceCounts,
+      environmentalEvidence: environmentalStatus,
       populationExposure: populationStatus,
       inventory: { status: inventoryReady ? 'available' : 'incomplete' },
       outputSchema: { status: schemaReady ? 'installed' : 'incomplete', tables: tableStatus },
@@ -129,7 +140,7 @@ const getReadiness = asyncRoute(async (_req, res) => {
       usableHazardOutputs: Boolean(latestFloodRun && ['completed', 'partial'].includes(latestFloodRun.status) && Number(latestFloodRun.polygon_count) > 0),
       earthEngine: { configured: Boolean(process.env.GEE_PROJECT_ID), liveConnection: 'not_checked_by_readiness' },
       prithvi: { status: fs.existsSync(prithviCheckpoint) ? 'configured_not_validated' : 'model_bundle_not_downloaded', checkpointAvailable: fs.existsSync(prithviCheckpoint), model: 'Prithvi-EO-2.0-300M-TL-Sen1Floods11', task: 'Sentinel-2 L1C flood segmentation', validatedForKenya: false, reason: fs.existsSync(prithviCheckpoint) ? 'Task checkpoint is present; no independent Kenya validation has been completed' : 'Run npm run oseas:prithvi:setup to fetch the pinned task checkpoint' },
-      hazardScope: 'Bounded Sentinel-1 relative-backscatter screening and Sentinel-2 Prithvi flood-candidate mapping are available; no calibrated risk, heat, wildfire, outage, or resilience scores are implied.'
+      hazardScope: 'Bounded Sentinel-1 and Sentinel-2 Prithvi flood candidates are separate. NASA POWER heat screening is coarse air-temperature context; FIRMS points are fire detections, not perimeters. No calibrated failure, damage, outage, criticality, vulnerability, or resilience score is implied.'
     },
     timestamp: new Date().toISOString()
   });
@@ -345,6 +356,23 @@ const getAssetVulnerability = asyncRoute(async (req, res) => {
   res.json({ assetId: req.params.id, status: result.rows.length ? result.rows[0].status : 'not_assessed', data: result.rows });
 });
 
+const getAssetCriticality = asyncRoute(async (req, res) => {
+  validateUuid(req.params.id);
+  const result = await db.query('SELECT * FROM asset_criticality_assessments WHERE energy_asset_id=$1 ORDER BY created_at DESC', [req.params.id]);
+  res.json({ assetId: req.params.id, status: result.rows.length ? result.rows[0].status : 'not_assessed', data: result.rows });
+});
+
+const getAssetServiceDependencies = asyncRoute(async (req, res) => {
+  validateUuid(req.params.id);
+  const result = await db.query(`SELECT d.id,d.critical_service_id,d.status,d.evidence,d.confidence,d.processing_run_id,d.created_at,
+      s.service_type,s.name,s.source_dataset_key,s.source_feature_id
+    FROM service_dependency_assessments d
+    LEFT JOIN critical_services s ON s.id=d.critical_service_id
+    WHERE d.energy_asset_id=$1 ORDER BY d.created_at DESC,d.id`, [req.params.id]);
+  const data = result.rows.map((row) => ({ ...row, evidence: parseJson(row.evidence, {}) }));
+  res.json({ assetId: req.params.id, status: data.some((row) => row.status === 'verified') ? 'verified' : (data.length ? data[0].status : 'not_assessed'), data });
+});
+
 const getAdminSummary = asyncRoute(async (req, res) => {
   const { level, id } = req.params;
   if (!['ward', 'county'].includes(level)) throw new AppError('INVALID_LEVEL', 'level must be ward or county', 400);
@@ -367,4 +395,4 @@ const getPriorities = asyncRoute(async (req, res) => {
   res.json({ data: result.rows.map((row) => ({ ...row, evidence: parseJson(row.evidence, {}), assumptions: parseJson(row.assumptions, {}) })), pagination: { limit, offset }, status: result.rows.length ? 'available' : 'not_assessed' });
 });
 
-module.exports = { getReadiness, getCatalog, getRuns, getRun, getLayers, getFloodGeoJson, getHydrographyGeoJson, getFloodReferenceGeoJson, getMapOutputGeoJson, getPopulationExposureGeoJson, getWindResourceManifest, downloadWindResource, listAssets, getAssetExposure, getAssetVulnerability, getAdminSummary, getPriorities };
+module.exports = { getReadiness, getCatalog, getRuns, getRun, getLayers, getFloodGeoJson, getHydrographyGeoJson, getFloodReferenceGeoJson, getMapOutputGeoJson, getPopulationExposureGeoJson, getWindResourceManifest, downloadWindResource, listAssets, getAssetExposure, getAssetVulnerability, getAssetCriticality, getAssetServiceDependencies, getAdminSummary, getPriorities };

@@ -1,4 +1,4 @@
-"""Persist point membership and clipped line/polygon measures to wards/counties."""
+﻿"""Persist point membership and clipped line/polygon measures to wards/counties."""
 
 from __future__ import annotations
 
@@ -25,7 +25,7 @@ def main() -> int:
         raise RuntimeError("psycopg[binary] is required; install requirements.txt") from exc
 
     run_id = str(uuid.uuid4())
-    with psycopg.connect(url, connect_timeout=15, options="-c statement_timeout=600000", application_name="oseas-admin-assignment") as connection:
+    with psycopg.connect(url, prepare_threshold=None, connect_timeout=15, options="-c statement_timeout=600000", application_name="oseas-admin-assignment") as connection:
         with connection.cursor() as cur:
             cur.execute("SELECT pg_try_advisory_lock(hashtext(%s), hashtext('writer'))", ("oseas_earth_engine_ingest",))
             if not cur.fetchone()[0]:

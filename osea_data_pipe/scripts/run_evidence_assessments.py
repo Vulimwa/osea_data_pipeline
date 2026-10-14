@@ -1,4 +1,4 @@
-"""Generate evidence-gated OSEAS decision-support outputs in PostGIS."""
+﻿"""Generate evidence-gated OSEAS decision-support outputs in PostGIS."""
 
 from __future__ import annotations
 
@@ -19,7 +19,7 @@ def main() -> int:
         raise RuntimeError("DB_URL, DATABASE_URL, or SUPABASE_DB_URL is required")
     import psycopg
 
-    with psycopg.connect(url, connect_timeout=15, options="-c statement_timeout=120000", application_name="oseas-evidence-assessments") as connection:
+    with psycopg.connect(url, prepare_threshold=None, connect_timeout=15, options="-c statement_timeout=120000", application_name="oseas-evidence-assessments") as connection:
         with connection.cursor() as cur:
             cur.execute("""SELECT to_regclass('public.energy_assets'),to_regclass('public.asset_hazard_exposure'),
                 to_regclass('public.asset_criticality_assessments'),to_regclass('public.service_dependency_assessments'),

@@ -47,6 +47,20 @@ class WorldPopZonalTests(unittest.TestCase):
         self.assertEqual(zone["inside_pixels"], 3)
         self.assertEqual(zone["population"], 2 + 3)
 
+    def test_geometry_outside_population_raster_returns_no_coverage(self):
+        with rasterio.open(self.raster_path) as src:
+            result = _pixel_stats(src, box(10, 10, 11, 11))
+        self.assertIsNone(result["population"])
+        self.assertEqual(result["inside_pixels"], 0)
+        self.assertEqual(result["valid_pixels"], 0)
+        self.assertIsNone(result["valid_fraction"])
+
+    def test_subpixel_edge_geometry_returns_no_coverage_instead_of_window_error(self):
+        with rasterio.open(self.raster_path) as src:
+            result = _pixel_stats(src, box(0.01, 3.99, 0.02, 3.995))
+        self.assertIsNone(result["population"])
+        self.assertEqual(result["inside_pixels"], 0)
+
     def test_stable_ids_are_repeatable_and_scope_specific(self):
         first = stable_assessment_id("hash", "event", "county", "1")
         self.assertEqual(first, stable_assessment_id("hash", "event", "county", "1"))

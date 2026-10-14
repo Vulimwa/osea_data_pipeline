@@ -1,4 +1,4 @@
-"""Run one explicit, bounded Sentinel-1 flood candidate assessment and persist outputs."""
+﻿"""Run one explicit, bounded Sentinel-1 flood candidate assessment and persist outputs."""
 
 from __future__ import annotations
 
@@ -232,7 +232,7 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
         raise RuntimeError("Earth Engine authentication failed")
     import ee
 
-    with psycopg.connect(url, connect_timeout=15, options="-c statement_timeout=600000", application_name="oseas-flood-screen") as connection:
+    with psycopg.connect(url, prepare_threshold=None, connect_timeout=15, options="-c statement_timeout=600000", application_name="oseas-flood-screen") as connection:
         with connection.cursor() as cur:
             cur.execute("SELECT pg_try_advisory_lock(hashtext(%s),hashtext('writer'))", (INGEST_LOCK,))
             if not cur.fetchone()[0]:

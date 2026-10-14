@@ -1,4 +1,4 @@
-"""Audit or ingest the bundled 2024 UNOSAT flood reference shapefiles."""
+﻿"""Audit or ingest the bundled 2024 UNOSAT flood reference shapefiles."""
 
 from __future__ import annotations
 
@@ -70,7 +70,7 @@ def main() -> int:
         raise RuntimeError("DB_URL, DATABASE_URL, or SUPABASE_DB_URL is required")
     import psycopg
 
-    with psycopg.connect(url, connect_timeout=15, options="-c statement_timeout=120000", application_name="oseas-unosat-reference") as connection:
+    with psycopg.connect(url, prepare_threshold=None, connect_timeout=15, options="-c statement_timeout=120000", application_name="oseas-unosat-reference") as connection:
         with connection.cursor() as cur:
             cur.execute("""SELECT to_regclass('public.flood_reference_features'), to_regclass('public.ingestion_runs'),
                                  to_regclass('public.datasets'), to_regclass('public.dataset_versions'),

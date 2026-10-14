@@ -9,7 +9,7 @@ npm ci
 python -m pip install -r requirements.txt
 ```
 
-Set `.env` locally with `DB_URL` (or supported PostgreSQL URL alias), `GEE_PROJECT_ID`, Earth Engine credentials, and all supplied `GEE_ASSET_*` values. Do not copy secrets into source control or reports. A FIRMS key is optional until its adapter is implemented.
+Set `.env` locally with `DB_URL` (or supported PostgreSQL URL alias), `GEE_PROJECT_ID`, Earth Engine credentials, and all supplied `GEE_ASSET_*` values. Do not copy secrets into source control or reports. NASA FIRMS requires `NASA_FIRMS_MAP_KEY` plus an explicit fire period; without them the all-in-one run records fire as blocked.
 
 Paste [`../database/schema.sql`](../database/schema.sql) into Supabase SQL Editor and execute it. It uses additive `CREATE ... IF NOT EXISTS`/`ALTER ... IF NOT EXISTS` statements and does not drop existing data. Then run the read-only schema check:
 
@@ -24,7 +24,7 @@ npm run oseas:flood:unosat:audit
 npm run oseas:flood:unosat:ingest
 ```
 
-The audit is read-only. The import upserts four source polygons by dataset/file/feature key into `flood_reference_features`; it is safe to rerun. The source contains two event codes (`FL20240421KEN`, `FL20240426KEN`) and labels its own field validation as not yet complete. PostGIS repairs invalid polygon topology for storage, while the original attributes remain preserved. This does not validate any model output.
+The audit is read-only. The import upserts four source polygons by dataset/file/feature key into `flood_reference_features`; it is safe to rerun. The source contains two event codes (`FL20240421KEN`, `FL20240426KEN`) and labels its own field validation as not yet complete. The importer retains source shapefile bundles and checksums, simplifies operational polygons at a configurable tolerance (default about 5.6 m, matched to the 10 m product scale), and lets PostGIS repair polygon topology. This does not validate any model output.
 
 ## 1a. WorldPop population exposure
 
@@ -46,6 +46,29 @@ npm run oseas:population:persist
 ```
 
 This command checks for an active UNOSAT import and refuses to overlap it. It writes idempotent population rows, raster checksum/version metadata, quality and spatial coverage records. WorldPop population is a modeled estimate of residents inside the flood footprint, not measured impacts and not people supplied by energy assets. See [`IMPLEMENTATION_STATUS.md`](IMPLEMENTATION_STATUS.md) and [`FRONTEND_INTEGRATION_GUIDE.md`](FRONTEND_INTEGRATION_GUIDE.md).
+
+## 1b. Single configured pipeline command
+
+After the initial schema and environment setup, run:
+
+```powershell
+npm run oseas:pipeline
+```
+
+It performs database preflight, configured Earth Engine feature ingestion, county/ward assignment, NASA POWER daily heat acquisition, idempotent UNOSAT import, WorldPop acquisition and population persistence, evidence-gated asset assessments, and FIRMS acquisition when a map key and explicit dates are configured. It prints every stage and writes `outputs/last_pipeline_run.json`. Use `npm run oseas:pipeline -- --skip-earth-engine` to work from the existing inventory, or `--skip-worldpop-download` when the validated raster is already present. A process lock rejects overlapping orchestrators.
+
+The bounded Sentinel-1 flood event stage runs only when `.env` defines `OSEAS_FLOOD_BBOX`, `OSEAS_FLOOD_EVENT_START/END`, and `OSEAS_FLOOD_BASELINE_START/END`; no event window is guessed. `OSEAS_HEAT_START_DATE`, `OSEAS_HEAT_END_DATE`, and `OSEAS_HEAT_SCREEN_THRESHOLD_C` configure heat processing (defaults: 2024 and 35 C). `OSEAS_FIRE_START_DATE/END`, `OSEAS_FIRE_BBOX`, `OSEAS_FIRE_SENSOR`, and `OSEAS_FIRE_PROXIMITY_KM` configure FIRMS.
+
+The pipeline is restartable: source feature upserts use stable IDs, WorldPop result IDs include both raster and source-footprint fingerprints, and evidence assessments use stable IDs over their input evidence. A repeated identical result does not create duplicate assessment rows. The run continues through independent stages if one optional source is blocked and reports each outcome.
+
+## 1c. Heat and wildfire evidence
+
+```powershell
+npm run oseas:heat
+npm run oseas:fire
+```
+
+NASA POWER heat products store daily T2M_MAX air temperature, anomalies against the 2001–2020 mean monthly T2M_MAX by calendar month, configurable hot-day counts, grid-cell heat events, and nearest-grid asset screening within 45 km. The NASA POWER regional API uses a 0.5-degree grid; this is coarse air-temperature context, not Landsat land-surface temperature, microclimate, or proof of damage. FIRMS stores active-fire detections as points and proximity measurements; it does not produce burn perimeters. Absence of a detection is not proof of no fire. A separate burned-area product/adapter remains outstanding.
 
 ## 2. Check Earth Engine source access
 

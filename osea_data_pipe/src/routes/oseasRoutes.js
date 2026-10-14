@@ -20,6 +20,8 @@ router.get('/layers/wind_resource/:product/geotiff', controller.downloadWindReso
 router.get('/layers/:layer/geojson', controller.getMapOutputGeoJson);
 router.get('/assets', controller.listAssets);
 router.get('/assets/:id/exposure', controller.getAssetExposure);
+router.get('/assets/:id/criticality', controller.getAssetCriticality);
+router.get('/assets/:id/service-dependencies', controller.getAssetServiceDependencies);
 router.get('/assets/:id/vulnerability', controller.getAssetVulnerability);
 router.get('/administrative/:level/:id/summary', controller.getAdminSummary);
 router.get('/priorities', controller.getPriorities);

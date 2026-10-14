@@ -84,3 +84,5 @@ Thumbs.db
 # Generated JavaScript artifacts
 *.tsbuildinfo
 *.map
+*.outputs.md
+!. outputs.md

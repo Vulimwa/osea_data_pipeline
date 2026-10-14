@@ -25,6 +25,7 @@ if (Path(_RASTERIO_PROJ) / "proj.db").exists():
 from rasterio.features import geometry_mask
 from rasterio.windows import from_bounds
 from shapely.geometry import GeometryCollection, mapping
+from shapely.ops import unary_union
 from shapely import wkb
 from shapely import clip_by_rect
 
@@ -52,7 +53,13 @@ def _pixel_stats(src: rasterio.io.DatasetReader, geometries: list[Any], tile_siz
         return {"population": None, "inside_pixels": 0, "valid_pixels": 0, "valid_fraction": None}
     bounds = (min(geom.bounds[0] for geom in geometries), min(geom.bounds[1] for geom in geometries),
               max(geom.bounds[2] for geom in geometries), max(geom.bounds[3] for geom in geometries))
+    raster_bounds = src.bounds
+    if (bounds[2] <= raster_bounds.left or bounds[0] >= raster_bounds.right
+            or bounds[3] <= raster_bounds.bottom or bounds[1] >= raster_bounds.top):
+        return {"population": None, "inside_pixels": 0, "valid_pixels": 0, "valid_fraction": None}
     window = from_bounds(*bounds, transform=src.transform).round_offsets().round_lengths()
+    if window.width <= 0 or window.height <= 0:
+        return {"population": None, "inside_pixels": 0, "valid_pixels": 0, "valid_fraction": None}
     window = window.intersection(rasterio.windows.Window(0, 0, src.width, src.height))
     if window.width <= 0 or window.height <= 0:
         return {"population": None, "inside_pixels": 0, "valid_pixels": 0, "valid_fraction": None}
@@ -141,6 +148,7 @@ def summarize_footprints(raster_path: Path, events: Iterable[dict[str, Any]], *,
                 print(f"WorldPop {event['event_key']}: zonal summary {index}/{len(zones)} ({zone.kind} {zone.name or zone.key}); valid_pixels={stats['valid_pixels']}", flush=True)
             results.append({
                 "event_key": event["event_key"],
+                "source_geometry_sha256": event["source_geometry_sha256"],
                 "event_dates": sorted({item.get("event_date") for item in event["features"] if item.get("event_date")}),
                 "source_feature_count": len(geometries),
                 "geometry": event_geom,
@@ -217,6 +225,25 @@ def persist_summaries(connection: Any, summary: dict[str, Any], raster_path: Pat
     dataset_source = f"https://hub.worldpop.org/geodata/listing?id=135; {source_version}; SHA256={raster_hash}"
     row_count = 0
     unit_count = 0
+    coverage_count = 0
+    processed_zones = 0
+    # The installed unique index allows one coverage row per reporting unit
+    # and run. Aggregate event footprints by unit while keeping the population
+    # estimate rows event-specific.
+    coverage_by_unit: dict[str, dict[str, Any]] = {}
+    for event in summary["events"]:
+        for zone in event["zones"]:
+            if zone["kind"] != "administrative_unit":
+                continue
+            aggregate = coverage_by_unit.setdefault(zone["zone_key"], {
+                "reporting_unit_level": zone["reporting_unit_level"], "geometries": [],
+                "inside_pixels": 0, "valid_pixels": 0, "event_keys": [], "event_dates": [],
+            })
+            aggregate["geometries"].append(zone["geometry"])
+            aggregate["inside_pixels"] += zone["inside_pixels"]
+            aggregate["valid_pixels"] += zone["valid_pixels"]
+            aggregate["event_keys"].append(event["event_key"])
+            aggregate["event_dates"].extend(event["event_dates"])
     with connection.cursor() as cur:
         cur.execute("SELECT pg_try_advisory_lock(hashtext(%s))", ("oseas_worldpop_population_exposure",))
         if not cur.fetchone()[0]:
@@ -233,6 +260,44 @@ def persist_summaries(connection: Any, summary: dict[str, Any], raster_path: Pat
         connection.commit()
     try:
         with connection.cursor() as cur:
+            population_sql = """INSERT INTO population_exposure_assessments
+              (id,dataset_key,hazard_event_id,processing_run_id,reporting_unit_id,population_total,
+               population_potentially_exposed,assessment_status,method,evidence,confidence,geom,created_at)
+              VALUES (%s,%s,NULL,%s,%s,NULL,%s,%s,%s,%s::jsonb,NULL,ST_SetSRID(ST_GeomFromGeoJSON(%s),4326),NOW())
+              ON CONFLICT (id) DO UPDATE SET processing_run_id=EXCLUDED.processing_run_id,
+                population_potentially_exposed=EXCLUDED.population_potentially_exposed,
+                assessment_status=EXCLUDED.assessment_status,evidence=EXCLUDED.evidence,geom=EXCLUDED.geom,created_at=NOW()"""
+            coverage_sql = """INSERT INTO spatial_coverage_assessments
+              (id,dataset_key,processing_run_id,reporting_unit_id,reporting_unit_level,hazard_type,evidence_kind,
+               observation_start,observation_end,coverage_status,valid_data_fraction,observation_footprint,
+               valid_data_footprint,quality_mask,validation_status,limitations,provenance)
+              VALUES (%s,%s,%s,%s,%s,'flood','observed',%s::date,%s::date,%s,%s,
+                ST_SetSRID(ST_GeomFromGeoJSON(%s),4326),ST_SetSRID(ST_GeomFromGeoJSON(%s),4326),
+                %s::jsonb,'not_validated',%s::jsonb,%s::jsonb)
+              ON CONFLICT(id) DO UPDATE SET processing_run_id=EXCLUDED.processing_run_id,
+                valid_data_fraction=EXCLUDED.valid_data_fraction,observation_footprint=EXCLUDED.observation_footprint,
+                valid_data_footprint=EXCLUDED.valid_data_footprint,quality_mask=EXCLUDED.quality_mask,
+                limitations=EXCLUDED.limitations,provenance=EXCLUDED.provenance,created_at=NOW()"""
+            population_batch = []
+            coverage_batch = []
+            total_zones = sum(len(event["zones"]) for event in summary["events"])
+
+            def flush_batch() -> None:
+                nonlocal row_count, coverage_count
+                if population_batch:
+                    cur.executemany(population_sql, population_batch)
+                    row_count += max(cur.rowcount, 0)
+                if coverage_batch:
+                    cur.executemany(coverage_sql, coverage_batch)
+                    coverage_count += max(cur.rowcount, 0)
+                cur.execute("UPDATE ingestion_runs SET metadata=metadata||%s::jsonb WHERE id=%s",
+                            (json.dumps({"persisted_population_rows": row_count, "persisted_coverage_rows": coverage_count,
+                                         "processed_zones": processed_zones}), run_id))
+                connection.commit()
+                population_batch.clear()
+                coverage_batch.clear()
+                print(f"WorldPop persistence progress: zones={processed_zones}/{total_zones}; population_rows={row_count}; coverage_rows={coverage_count}", flush=True)
+
             for event in summary["events"]:
                 event_dates = event["event_dates"]
                 period_start = min(event_dates) if event_dates else None
@@ -254,33 +319,39 @@ def persist_summaries(connection: Any, summary: dict[str, Any], raster_path: Pat
                     }
                     status = ("unknown" if not zone["valid_pixels"] else
                               ("assessed" if zone["valid_fraction"] == 1 else "partial"))
-                    cur.execute("""INSERT INTO population_exposure_assessments
-                      (id,dataset_key,hazard_event_id,processing_run_id,reporting_unit_id,population_total,
-                       population_potentially_exposed,assessment_status,method,evidence,confidence,geom,created_at)
-                      VALUES (%s,%s,NULL,%s,%s,NULL,%s,%s,%s,%s::jsonb,NULL,
-                              ST_SetSRID(ST_GeomFromGeoJSON(%s),4326),NOW())
-                      ON CONFLICT (id) DO UPDATE SET processing_run_id=EXCLUDED.processing_run_id,
-                        population_potentially_exposed=EXCLUDED.population_potentially_exposed,
-                        assessment_status=EXCLUDED.assessment_status,evidence=EXCLUDED.evidence,geom=EXCLUDED.geom,created_at=NOW()""",
-                                (stable_id, DATASET_KEY, run_id, zone["zone_key"] if zone["kind"] == "administrative_unit" else None,
-                                 zone["population"], status, METHOD, json.dumps(evidence), geom_json))
-                    row_count += 1
+                    population_batch.append((stable_id, DATASET_KEY, run_id,
+                      zone["zone_key"] if zone["kind"] == "administrative_unit" else None,
+                      zone["population"], status, METHOD, json.dumps(evidence), geom_json))
                     unit_count += int(zone["kind"] == "administrative_unit")
-                    cur.execute("""INSERT INTO spatial_coverage_assessments
-                      (dataset_key,processing_run_id,reporting_unit_id,reporting_unit_level,hazard_type,evidence_kind,
-                       observation_start,observation_end,coverage_status,valid_data_fraction,observation_footprint,
-                       valid_data_footprint,quality_mask,validation_status,limitations,provenance)
-                      VALUES (%s,%s,%s,%s,'flood','observed',%s::date,%s::date,%s,%s,
-                        ST_SetSRID(ST_GeomFromGeoJSON(%s),4326),ST_SetSRID(ST_GeomFromGeoJSON(%s),4326),
-                        %s::jsonb,'not_validated',%s::jsonb,%s::jsonb)""",
-                                (DATASET_KEY, run_id, zone["zone_key"] if zone["kind"] == "administrative_unit" else None,
-                                 zone["reporting_unit_level"] or "national", period_start, period_end,
-                                 "partially_assessed" if zone["valid_fraction"] not in (1, None) else ("assessed" if zone["valid_pixels"] else "insufficient_data"),
-                                 zone["valid_fraction"], geom_json,
-                                 geom_json if zone["valid_fraction"] == 1 else None,
-                                 json.dumps({"insidePixels": zone["inside_pixels"], "validPixels": zone["valid_pixels"]}),
-                                 json.dumps(summary["limitations"]), json.dumps({"method": METHOD, "sourceRasterSha256": raster_hash,
-                                                                               "eventKey": event["event_key"], "processingRunId": str(run_id)})))
+                    if zone["kind"] == "event":
+                        # Event-specific coverage is already attached to the
+                        # population row. The installed run-scope unique index
+                        # cannot distinguish multiple event-level NULL scopes.
+                        pass
+                    processed_zones += 1
+                    if processed_zones % 25 == 0 or processed_zones == total_zones:
+                        flush_batch()
+            for zone_key, aggregate in coverage_by_unit.items():
+                inside_pixels = aggregate["inside_pixels"]
+                valid_pixels = aggregate["valid_pixels"]
+                valid_fraction = valid_pixels / inside_pixels if inside_pixels else None
+                coverage_geom = unary_union(aggregate["geometries"])
+                coverage_geom_json = json.dumps(mapping(coverage_geom))
+                coverage_id = stable_assessment_id(raster_hash, "admin_coverage", zone_key)
+                event_keys = sorted(set(aggregate["event_keys"]))
+                event_dates = sorted(set(aggregate["event_dates"]))
+                coverage_batch.append((coverage_id, DATASET_KEY, run_id, zone_key,
+                  aggregate["reporting_unit_level"] or "national", min(event_dates) if event_dates else None,
+                  max(event_dates) if event_dates else None,
+                  "partially_assessed" if valid_fraction not in (1, None) else ("assessed" if valid_pixels else "insufficient_data"),
+                  valid_fraction, coverage_geom_json, coverage_geom_json if valid_fraction == 1 else None,
+                  json.dumps({"insidePixels": inside_pixels, "validPixels": valid_pixels}),
+                  json.dumps(summary["limitations"]), json.dumps({"method": METHOD, "sourceRasterSha256": raster_hash,
+                    "eventKeys": event_keys, "processingRunId": str(run_id)})))
+                if len(coverage_batch) >= 25:
+                    flush_batch()
+            if coverage_batch:
+                flush_batch()
             cur.execute("""INSERT INTO dataset_versions (dataset_key,source_reference,source_version,checksum,retrieved_at,
                        observation_start,observation_end,feature_count,metadata,processing_run_id)
                        SELECT %s,%s,%s,%s,NOW(),NULL,NULL,%s,%s::jsonb,%s
@@ -291,23 +362,28 @@ def persist_summaries(connection: Any, summary: dict[str, Any], raster_path: Pat
             cur.execute("UPDATE datasets SET last_ingested_at=NOW(),updated_at=NOW() WHERE dataset_key=%s", (DATASET_KEY,))
             cur.execute("INSERT INTO data_quality_checks (run_id,dataset_key,check_name,status,details) VALUES (%s,%s,'worldpop_raster_and_coverage','warning',%s::jsonb)",
                         (run_id, DATASET_KEY, json.dumps({"rasterSha256": raster_hash, "populationReferenceYear": summary["population_reference_year"],
-                                                          "assessmentRows": row_count, "administrativeRows": unit_count,
+                                                          "assessmentRows": row_count, "administrativeRows": unit_count, "coverageRows": coverage_count,
                                                           "scientificValidationStatus": summary["scientific_validation_status"],
                                                           "limitations": summary["limitations"]})))
             cur.execute("UPDATE ingestion_runs SET status='completed',finished_at=NOW(),metadata=metadata||%s::jsonb WHERE id=%s",
-                        (json.dumps({"assessment_rows": row_count, "administrative_rows": unit_count, "raster_sha256": raster_hash}), run_id))
+                        (json.dumps({"assessment_rows": row_count, "administrative_rows": unit_count,
+                          "coverage_rows": coverage_count, "raster_sha256": raster_hash}), run_id))
         connection.commit()
     except Exception as error:
         connection.rollback()
         with connection.cursor() as cur:
-            cur.execute("UPDATE ingestion_runs SET status='failed',finished_at=NOW(),error_message=%s WHERE id=%s", (str(error)[:4000], run_id))
+            cur.execute("UPDATE ingestion_runs SET status=%s,finished_at=NOW(),error_message=%s,metadata=metadata||%s::jsonb WHERE id=%s",
+                        ("partial" if row_count else "failed", str(error)[:4000],
+                         json.dumps({"persisted_population_rows": row_count, "persisted_coverage_rows": coverage_count,
+                                     "processed_zones": processed_zones}), run_id))
         connection.commit()
         raise
     finally:
         with connection.cursor() as cur:
             cur.execute("SELECT pg_advisory_unlock(hashtext(%s))", ("oseas_worldpop_population_exposure",))
         connection.commit()
-    return {"assessment_rows": row_count, "administrative_rows": unit_count, "run_id": str(run_id)}
+    return {"assessment_rows": row_count, "administrative_rows": unit_count,
+            "coverage_rows": coverage_count, "run_id": str(run_id)}
 
 
 def events_from_local_unosat(source_dir: Path) -> list[dict[str, Any]]:

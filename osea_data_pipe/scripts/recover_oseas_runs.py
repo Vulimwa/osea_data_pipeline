@@ -1,4 +1,4 @@
-"""Mark abandoned OSEAS importer runs failed without changing ingested feature rows."""
+﻿"""Mark abandoned OSEAS importer runs failed without changing ingested feature rows."""
 
 from __future__ import annotations
 
@@ -21,7 +21,7 @@ def main() -> int:
     except ImportError as exc:
         raise RuntimeError("psycopg[binary] is required; install requirements.txt") from exc
 
-    with psycopg.connect(url, connect_timeout=15, application_name="oseas-run-recovery") as connection:
+    with psycopg.connect(url, prepare_threshold=None, connect_timeout=15, application_name="oseas-run-recovery") as connection:
         recovered: dict[str, list[str]] = {}
         with connection.cursor() as cur:
             cur.execute("SELECT pg_try_advisory_lock(hashtext(%s), hashtext('writer'))", (LOCK_NAMESPACE,))

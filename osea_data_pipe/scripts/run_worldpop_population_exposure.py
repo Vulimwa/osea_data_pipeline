@@ -1,4 +1,4 @@
-"""Estimate population within observed flood footprints using WorldPop counts."""
+﻿"""Estimate population within observed flood footprints using WorldPop counts."""
 
 from __future__ import annotations
 
@@ -83,7 +83,7 @@ def main() -> int:
             raise RuntimeError("DB_URL, DATABASE_URL, or SUPABASE_DB_URL is required for --persist")
         import psycopg
 
-        with psycopg.connect(url, connect_timeout=15, options="-c statement_timeout=120000", application_name="oseas-worldpop-exposure") as connection:
+        with psycopg.connect(url, prepare_threshold=None, connect_timeout=20, options="-c default_transaction_read_only=on -c statement_timeout=120000", application_name="oseas-worldpop-read") as connection:
             with connection.cursor() as cur:
                 cur.execute("SELECT id::text FROM ingestion_runs WHERE pipeline_name='oseas_local_flood_reference_ingest' AND status='running' ORDER BY started_at DESC LIMIT 1")
                 active = cur.fetchone()
@@ -95,9 +95,17 @@ def main() -> int:
             events = _db_events(connection, "kenya_flood_2024_unosat")
             if not events:
                 raise RuntimeError("No UNOSAT flood reference rows are persisted yet; finish the reference ingestion before --persist")
-            # Attach county and ward units intersecting each event and summarize coverage.
+            # Read only the reference and boundaries, then close this connection before
+            # raster processing. Supabase poolers can close long-idle sessions.
             attach_admin_units(connection, events)
-            summary = summarize_footprints(args.raster, events, year=args.year)
+        summary = summarize_footprints(args.raster, events, year=args.year)
+        # Reconnect for the short write transaction after potentially lengthy zonal work.
+        with psycopg.connect(url, prepare_threshold=None, connect_timeout=20, options="-c statement_timeout=120000", application_name="oseas-worldpop-persist") as connection:
+            with connection.cursor() as cur:
+                cur.execute("SELECT id::text FROM ingestion_runs WHERE pipeline_name='oseas_local_flood_reference_ingest' AND status='running' ORDER BY started_at DESC LIMIT 1")
+                active = cur.fetchone()
+                if active:
+                    raise RuntimeError(f"UNOSAT reference ingestion run {active[0]} became active during zonal processing; persistence is paused")
             result = persist_summaries(connection, summary, args.raster, "kenya_flood_2024_unosat",
                                        f"WorldPop Global2 R2025A v1, year {args.year}")
         print(json.dumps({"status": "completed", **result, "dataset_key": DATASET_KEY}, indent=2))
@@ -110,7 +118,7 @@ def main() -> int:
             raise RuntimeError("DB_URL, DATABASE_URL, or SUPABASE_DB_URL is required for county/ward preview")
         import psycopg
 
-        with psycopg.connect(url, connect_timeout=15, options="-c default_transaction_read_only=on -c statement_timeout=120000", application_name="oseas-worldpop-admin-preview") as connection:
+        with psycopg.connect(url, prepare_threshold=None, connect_timeout=15, options="-c default_transaction_read_only=on -c statement_timeout=120000", application_name="oseas-worldpop-admin-preview") as connection:
             attach_admin_units(connection, events)
     summary = summarize_footprints(args.raster, events, year=args.year)
     persist_local_results(args.output, summary, args.raster)

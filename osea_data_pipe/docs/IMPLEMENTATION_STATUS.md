@@ -1,42 +1,47 @@
 # OSEAS backend implementation status
 
-Assessment date: 2026-10-14. This report distinguishes code in the repository from results actually acquired or persisted. `READY` means executable and evidenced; `READY_WITH_LIMITATIONS` means a working bounded workflow with known gaps; `BLOCKED` means execution depends on a stated external input or the active import; `NOT_IMPLEMENTED` means no complete processing chain exists.
+Assessment date: 2026-10-14. Status reflects code and observed results; configured sources and runnable processors are not represented as persisted data.
 
-| Deliverable | Status | What exists and what is still missing |
+| Deliverable | Status | Evidence and remaining limitation |
 |---|---|---|
-| 59 Standardized energy inventory | READY_WITH_LIMITATIONS | Earth Engine ingestion, normalization, deterministic source keys, PostGIS upserts and admin assignment exist. The historic run recorded 323 rejected geometries across four source assets; configured source coverage is not proof of national completeness. |
-| 60 Flood extent | READY_WITH_LIMITATIONS | Distinct Sentinel-1 baseline, Sentinel-2 Prithvi workflow, and UNOSAT reference ingestion are implemented. The user-started UNOSAT run is currently marked `running`; latest local check showed zero imported rows and no end timestamp. No compatible scientific validation metrics are available. |
-| 61 Rainfall indicators | NOT_IMPLEMENTED | CHIRPS/ERA5 catalog entries and rainfall context in flood screening exist. There is no persisted accumulation/anomaly/extreme-rainfall product workflow. |
-| 62 Terrain/drainage | READY_WITH_LIMITATIONS | DEM slope is used by the Sentinel-1 flood screen; no reusable national terrain, flow accumulation or asset-level drainage output has been executed and persisted. |
-| 63 Heat exposure | NOT_IMPLEMENTED | Landsat/ERA5 sources are cataloged; no quality-masked LST/air-temperature assessment output is produced. |
-| 64 Wildfire | NOT_IMPLEMENTED | FIRMS and MODIS sources are cataloged; no fire acquisition/exposure processor is implemented. |
-| 65 Asset hazard exposure | READY_WITH_LIMITATIONS | Flood candidate polygons can be intersected with inventory assets and summaries. This does not yet cover every hazard, full geometry-specific denominators, or all source products. |
-| 66 Infrastructure criticality | NOT_IMPLEMENTED | Tables and map layer contract exist. No defensible score is calculated; current response must be interpreted as unassessed. |
-| 67 Service dependencies | READY_WITH_LIMITATIONS | Relationship tables and map layer exist. No verified feeder/service relationship source is loaded; proximity is not treated as dependency. |
-| 68 Population exposed | READY_WITH_LIMITATIONS | WorldPop 2024 Global2 download, cell-center zonal processor, local preview, idempotent persistence, county/ward intersections, coverage records and a filtered map endpoint are implemented. Current download/preview has not yet been verified complete; no population result has been persisted. Results estimate residents inside a reference flood footprint, not confirmed impacted people or people served by assets. |
-| 69 Vulnerability | NOT_IMPLEMENTED | Output schema/API exist; no evidence-supported scoring method is executed. |
-| 70 Grid resilience | NOT_IMPLEMENTED | Schema/API exist; operational redundancy, outage and topology evidence are not available for a defensible composite score. |
-| 71 Confidence/data quality | READY_WITH_LIMITATIONS | Run provenance, data-quality checks and spatial coverage schemas/process records exist for implemented workflows. There is no complete shared quality framework across all source families. |
-| 72 Intervention scenarios | NOT_IMPLEMENTED | Scenario storage and read APIs exist. No deterministic baseline-versus-intervention engine or ranking is calculated. |
-| 73 Run/provenance | READY_WITH_LIMITATIONS | Ingestion/model run tables, quality checks, versions and API routes exist. Current run completeness varies by pipeline; the in-progress import has not recorded completion or progress rows. |
+| 59 Standardized energy inventory | READY_WITH_LIMITATIONS | Earth Engine ingestion, normalization, deterministic source keys, PostGIS upserts and county/ward assignment exist. Historic run recorded rejected geometries; configured data is not proof of national completeness. |
+| 60 Flood extent | READY_WITH_LIMITATIONS | Sentinel-1 and Sentinel-2 Prithvi candidate workflows exist. UNOSAT run `f7ca7842-711f-4840-8037-04abc337448e` completed and upserted 4 unique reference polygons. Source field validation remains incomplete; no flood model scientific metrics are claimed. |
+| 61 Rainfall indicators | NOT_IMPLEMENTED | CHIRPS/ERA5 are registered and used as context in flood screening. Persisted rainfall accumulations, anomalies and extreme-rainfall indicators are still outstanding. |
+| 62 Terrain/drainage | READY_WITH_LIMITATIONS | DEM slope is used by Sentinel-1 screening. A reusable terrain/drainage product, flow accumulation and asset association have not been executed. |
+| 63 Heat exposure | READY_WITH_LIMITATIONS | NASA POWER daily T2M_MAX, provider monthly-climatology anomalies, configurable hot-day screens, grid-cell events, source versions and nearest-grid asset screening are implemented. Coarse (~0.5-degree) near-surface air temperature is not Landsat LST. Live persistence is pending verification. |
+| 64 Wildfire | BLOCKED | NASA FIRMS adapter stores active-fire points, source confidence category, proximity evidence and coverage. Requires `NASA_FIRMS_MAP_KEY` and explicit dates. It does not produce perimeters, burned area or damage claims. |
+| 65 Asset hazard exposure | READY_WITH_LIMITATIONS | Existing flood exposure and new heat/fire proximity routines persist asset-linked measurements. Complete source-wide coverage, line-specific denominator handling across hazards and persisted end-to-end verification remain outstanding. |
+| 66 Infrastructure criticality | READY_WITH_LIMITATIONS | Engine emits verified service context and missing-evidence explanations. Numeric score is withheld without calibrated normalization, network topology, served load and redundancy evidence. |
+| 67 Service dependencies | READY_WITH_LIMITATIONS | Verified, candidate, and unknown relationships are distinct; proximity never creates a dependency. No verified feeder/service relationship dataset is loaded. |
+| 68 Population exposed | READY_WITH_LIMITATIONS | WorldPop 2024 raster is locally validated. County/ward exposure processing is rerunning after a zero-height raster-window fix; database persistence and output counts are pending. Estimates represent residents in source footprints, not confirmed impacts or people served by energy assets. |
+| 69 Vulnerability | READY_WITH_LIMITATIONS | Per-asset observed exposure context and missing-evidence explanations are persisted; comprehensive score is withheld until sensitivity and adaptive-capacity evidence are present. |
+| 70 Grid resilience | READY_WITH_LIMITATIONS | Per-dimension evidence status is persisted; redundancy, topology and outage/restoration dimensions remain unassessed, so no composite score is emitted. |
+| 71 Confidence/data quality | READY_WITH_LIMITATIONS | Run, source version, quality-check and spatial-coverage records are used by implemented workflows. A universal quality framework across all source families remains outstanding. |
+| 72 Intervention scenarios | READY_WITH_LIMITATIONS | Deterministic unranked field-verification candidates are generated only for measured asset exposure. Intervention effects and cost-effectiveness remain unavailable. |
+| 73 Run/provenance | READY_WITH_LIMITATIONS | New acquisition and assessment adapters persist processing runs and versions. `npm run oseas:pipeline` runs supported stages in dependency order and writes `outputs/last_pipeline_run.json`; end-to-end live run remains pending. |
+
+## Verified UNOSAT result
+
+The importer completed on 2026-10-14. A read-only database query verified 4 rows and 4 distinct source feature IDs in `flood_reference_features` for `kenya_flood_2024_unosat`. It simplifies only operational geometries at a documented ~5.6 m tolerance; source files/checksums and original feature properties remain available. This does not make the reference field validated.
 
 ## WorldPop processing contract
 
-The source adapter fetches the Kenya annual constrained population-count GeoTIFF for a selected year (default 2024). The processor unions overlapping input flood polygons by event, counts each raster cell once per event when the cell center falls inside the footprint, and estimates zonal counts for the full event plus intersecting county/ward polygons already present in `administrative_units`. A per-zone valid-raster fraction distinguishes missing raster coverage from a measured zero. It does not double-count overlapping polygons within an event.
+The processor counts valid raster cell centers in each flood footprint and intersecting county/ward geometry. Overlapping source polygons are unioned in raster space so a cell contributes at most once per event. A geometry outside the raster or containing no pixel centers is represented as no coverage, not as a measured zero. Population values are modeled estimates; uncertainty and valid-cell fraction are retained.
 
-The current WorldPop R2025A v1 product is an alpha modeled population surface, in estimated persons per pixel. The method does not establish that residents were affected, displaced, or dependent on any specific energy asset. Independent event-specific validation is not yet available. See [WorldPop's product listing](https://hub.worldpop.org/geodata/listing?id=135) and [product catalog](https://hub.worldpop.org/project/categories?id=3).
-
-Commands:
+## Supported single command
 
 ```powershell
-npm run oseas:population:audit
-npm run oseas:population:download
-npm run oseas:population:exposure
-npm run oseas:population:persist
+npm run oseas:pipeline
 ```
 
-The local exposure command writes `outputs/worldpop_unosat_2024.geojson` and a JSON manifest without database writes. Persistence requires prior UNOSAT reference rows, county/ward geometries, the additive schema, and no active UNOSAT reference run. The persistence command checks this before writing.
+The command performs schema preflight, configured vector source ingestion, administrative assignment, NASA POWER heat retrieval, UNOSAT import, WorldPop acquisition and persistence, evidence-gated assessments, and FIRMS when configured. Flood event screening requires an explicitly bounded AOI and periods. Optional or unsupported sources are reported as blocked/limited rather than represented as successful empty outputs.
 
-## Current operational blocker
+## Remaining source and validation work
 
-The original Windows Python process PID 2540 still appears in the process table with command line `python scripts/ingest_unosat_flood_reference.py`, but it has no active PostgreSQL session or advisory lock. Run `94d46fda-53b3-4ad2-9ed3-03114c4fd831` was safely marked `failed` by stale-run recovery after acquiring the importer locks; no feature rows were changed. The database has zero UNOSAT rows. Because that old process remains present, the population `--persist` command detects it and refuses to write. Do not launch a replacement import until PID 2540 exits; then verify the run and feature counts. The importer has since been changed to stream and commit small batches, so a later rerun records partial progress and is idempotent.
+- CHIRPS/ERA5 standalone rainfall anomaly and extreme-rainfall products.
+- Reusable DEM-derived terrain and drainage products beyond flood-screen slope filtering.
+- Landsat LST quality-masked composites and comparison with NASA POWER air-temperature context.
+- NASA MODIS/Copernicus burned-area acquisition and exposure (FIRMS points are not perimeters).
+- Kenya-specific validation with compatible reference labels and precision/recall/IoU; no validation metrics are available.
+- Verify current heat and WorldPop outputs from the live database; FIRMS needs the private MAP_KEY and requested date window.
+- Run and inspect the full configured pipeline and the complete automated test suites after these changes.

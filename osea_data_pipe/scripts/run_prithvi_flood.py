@@ -1,4 +1,4 @@
-#!/usr/bin/env python3
+﻿#!/usr/bin/env python3
 """Fetch a small Sentinel-2 scene, run the official Prithvi flood segmenter, and persist products."""
 
 from __future__ import annotations
@@ -515,7 +515,7 @@ def _write_visual_preview(input_path: Path, prediction_path: Path, output_path: 
     figure, axis = plt.subplots(figsize=(9, 9))
     axis.imshow(rgb, extent=extent, origin="upper")
     axis.imshow(flood_overlay, extent=extent, origin="upper")
-    axis.set_title("Prithvi class 1 overlay (red) — candidate water, not validated flood extent")
+    axis.set_title("Prithvi class 1 overlay (red) â€” candidate water, not validated flood extent")
     axis.set_xlabel("Easting (m)")
     axis.set_ylabel("Northing (m)")
     figure.tight_layout()
@@ -552,7 +552,7 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
                   "model_id": MODEL_ID, "model_revision": MODEL_REVISION, "checkpoint": CHECKPOINT,
                   "preprocessing_version": "oseas-s2-l1c-prithvi-v3",
                   "lake_mask_asset_id": os.getenv("GEE_ASSET_KENYA_LAKES", "").strip() or None}
-    with psycopg.connect(db_url, connect_timeout=15, options="-c statement_timeout=600000", application_name="oseas-prithvi-flood") as connection:
+    with psycopg.connect(db_url, prepare_threshold=None, connect_timeout=15, options="-c statement_timeout=600000", application_name="oseas-prithvi-flood") as connection:
         with connection.cursor() as cur:
             cur.execute("SELECT pg_try_advisory_lock(hashtext(%s),hashtext('writer'))", (INGEST_LOCK,))
             if not cur.fetchone()[0]:

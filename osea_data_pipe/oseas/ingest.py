@@ -1,4 +1,4 @@
-"""Validate configured Earth Engine assets and persist their features to PostGIS."""
+﻿"""Validate configured Earth Engine assets and persist their features to PostGIS."""
 
 from __future__ import annotations
 
@@ -422,7 +422,7 @@ def run(audit_only: bool = False) -> int:
                 import psycopg
             except ImportError as exc:
                 raise RuntimeError("psycopg[binary] is required; install requirements.txt") from exc
-            connection = psycopg.connect(url, connect_timeout=15, options="-c statement_timeout=120000", application_name="oseas-ingest")
+            connection = psycopg.connect(url, prepare_threshold=None, connect_timeout=15, options="-c statement_timeout=120000", application_name="oseas-ingest")
             _acquire_run_lock(connection)
             _validate_schema(connection)
             with connection.cursor() as cur:
