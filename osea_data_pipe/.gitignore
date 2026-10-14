@@ -58,6 +58,7 @@ outputs/
 *.pt.part
 *.pth
 *.safetensors
+*.models/prithvi/flood_sen1floods11/
 models/prithvi/flood_sen1floods11/
 
 # Local Earth Engine and geospatial downloads
@@ -86,3 +87,9 @@ Thumbs.db
 *.map
 *.outputs.md
 !. outputs.md
+
+# Ignore large media/data folders or specific files
+*.mp4
+*.zip
+*.tar.gz
+outputs/

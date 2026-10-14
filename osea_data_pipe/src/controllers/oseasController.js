@@ -14,20 +14,24 @@ const windProducts = {
 const windCacheDir = path.resolve(__dirname, '../..', 'data/raw/global_wind_atlas/KEN');
 const mapLayerSql = {
   climate_observations: `SELECT id::text AS id,geom,jsonb_build_object('datasetKey',dataset_key,'variable',variable,'value',value,'unit',unit,'observedAt',observed_at,'processingRunId',processing_run_id) || source_properties AS properties FROM climate_observations`,
-  nightlights: `SELECT source_properties->>'zoneKey' AS id,geom,
-    ((jsonb_agg(source_properties)->0) - 'variable' - 'evidenceStatus') ||
-      jsonb_build_object('datasetKey',dataset_key,'zoneKey',source_properties->>'zoneKey',
-        'radianceMetrics',jsonb_object_agg(variable,value)) AS properties
-    FROM climate_observations WHERE dataset_key='nasa_viirs_black_marble_monthly'
-    GROUP BY dataset_key,source_properties->>'zoneKey',geom`,
+  rainfall: `SELECT o.id::text AS id,u.geom,jsonb_build_object('datasetKey',o.dataset_key,'variable',o.variable,'value',o.value,'unit',o.unit,'observedAt',o.observed_at,'processingRunId',o.processing_run_id) || o.source_properties AS properties FROM climate_observations o JOIN administrative_units u ON u.id::text=o.source_properties->>'reportingUnitId' WHERE o.dataset_key='chirps_daily' AND o.variable IN ('CHIRPS_30D_TOTAL_MM','CHIRPS_30D_ANOMALY_MM','CHIRPS_30D_ANOMALY_PERCENT')`,
+  nightlights: `SELECT o.source_properties->>'zoneKey' AS id,COALESCE(u.geom,o.geom) AS geom,
+    ((jsonb_agg(o.source_properties)->0) - 'variable' - 'evidenceStatus') ||
+      jsonb_build_object('datasetKey',o.dataset_key,'zoneKey',o.source_properties->>'zoneKey',
+        'radianceMetrics',jsonb_object_agg(o.variable,o.value)) AS properties
+    FROM climate_observations o
+    LEFT JOIN administrative_units u ON o.source_properties->>'zoneType' IN ('county','ward')
+      AND u.id::text=split_part(o.source_properties->>'zoneKey',':',2)
+    WHERE o.dataset_key='nasa_viirs_black_marble_monthly'
+    GROUP BY o.dataset_key,o.source_properties->>'zoneKey',COALESCE(u.geom,o.geom)`,
   climate_projections: `SELECT id::text AS id,geom,jsonb_build_object('datasetKey',dataset_key,'variable',variable,'value',value,'unit',unit,'scenario',scenario,'modelName',model_name,'periodStart',period_start,'periodEnd',period_end,'processingRunId',processing_run_id) || metadata AS properties FROM climate_projections`,
   terrain: `SELECT id::text AS id,geom,jsonb_build_object('datasetKey',dataset_key,'elevationM',elevation_m,'slopeDegrees',slope_degrees,'drainageDistanceM',drainage_distance_m,'processingRunId',processing_run_id) || metadata AS properties FROM terrain_metrics`,
   land_cover: `SELECT id::text AS id,geom,jsonb_build_object('datasetKey',dataset_key,'classCode',class_code,'className',class_name,'proportion',proportion,'periodStart',period_start,'periodEnd',period_end,'processingRunId',processing_run_id) || metadata AS properties FROM land_cover_metrics`,
   fire: `SELECT h.id::text AS id,h.geom,jsonb_build_object('hazardType',h.hazard_type,'evidenceKind',h.evidence_kind,'eventStart',h.event_start,'eventEnd',h.event_end,'source',h.source_reference,'confidence',f.confidence,'burnedAreaHa',f.burned_area_ha,'fireStatus',f.fire_status,'quality',f.quality,'metadata',h.metadata,'processingRunId',h.processing_run_id) AS properties FROM hazard_events h LEFT JOIN fire_events f ON f.hazard_event_id=h.id WHERE h.hazard_type IN ('fire','wildfire')`,
-  asset_exposure: `SELECT e.id::text AS id,a.geom,jsonb_build_object('energyAssetId',a.id,'assetType',a.asset_type,'assetName',a.name,'hazardType',e.hazard_type,'hazardEventId',e.hazard_event_id,'assessmentPeriodStart',e.assessment_period_start,'assessmentPeriodEnd',e.assessment_period_end,'exposureStatus',e.exposure_status,'intersectionAreaM2',e.intersection_area_m2,'intersectionLengthM',e.intersection_length_m,'distanceM',e.distance_m,'evidenceKind',e.evidence_kind,'confidence',e.confidence,'provenance',e.provenance,'processingRunId',e.processing_run_id) AS properties FROM asset_hazard_exposure e JOIN energy_assets a ON a.id=e.energy_asset_id`,
-  asset_vulnerability: `SELECT v.id::text AS id,a.geom,jsonb_build_object('energyAssetId',a.id,'assetType',a.asset_type,'assetName',a.name,'status',v.status,'vulnerabilityClass',v.vulnerability_class,'score',v.score,'sensitivity',v.sensitivity,'adaptiveCapacity',v.adaptive_capacity,'missingEvidence',v.missing_evidence,'confidence',v.confidence,'method',v.method,'provenance',v.provenance,'processingRunId',v.processing_run_id) AS properties FROM asset_vulnerability_assessments v JOIN energy_assets a ON a.id=v.energy_asset_id`,
-  asset_criticality: `SELECT c.id::text AS id,a.geom,jsonb_build_object('energyAssetId',a.id,'assetType',a.asset_type,'assetName',a.name,'status',c.status,'score',c.score,'method',c.method,'evidence',c.evidence,'confidence',c.confidence,'processingRunId',c.processing_run_id) AS properties FROM asset_criticality_assessments c JOIN energy_assets a ON a.id=c.energy_asset_id`,
-  service_dependencies: `SELECT d.id::text AS id,a.geom,jsonb_build_object('energyAssetId',a.id,'assetType',a.asset_type,'assetName',a.name,'criticalServiceId',s.id,'serviceType',s.service_type,'serviceName',s.name,'verified',d.verified,'confidence',d.confidence,'evidenceDatasetKey',d.evidence_dataset_key,'evidence',d.evidence) AS properties FROM service_dependencies d JOIN energy_assets a ON a.id=d.energy_asset_id JOIN critical_services s ON s.id=d.critical_service_id`,
+  asset_exposure: `SELECT e.id::text AS id,a.geom,jsonb_build_object('energyAssetId',a.id,'sourceDataset',a.source_dataset_key,'assetType',a.asset_type,'assetName',a.name,'hazardType',e.hazard_type,'hazardEventId',e.hazard_event_id,'assessmentPeriodStart',e.assessment_period_start,'assessmentPeriodEnd',e.assessment_period_end,'exposureStatus',e.exposure_status,'intersectionAreaM2',e.intersection_area_m2,'intersectionLengthM',e.intersection_length_m,'distanceM',e.distance_m,'evidenceKind',e.evidence_kind,'confidence',e.confidence,'provenance',e.provenance,'processingRunId',e.processing_run_id) AS properties FROM asset_hazard_exposure e JOIN energy_assets a ON a.id=e.energy_asset_id`,
+  asset_vulnerability: `SELECT v.id::text AS id,a.geom,jsonb_build_object('energyAssetId',a.id,'sourceDataset',a.source_dataset_key,'assetType',a.asset_type,'assetName',a.name,'status',v.status,'vulnerabilityClass',v.vulnerability_class,'score',v.score,'scoreStatus',CASE WHEN v.score IS NULL THEN CASE WHEN v.status='not_assessed' THEN 'not_assessed' ELSE 'withheld' END WHEN v.provenance ? 'pilot' THEN 'pilot_screening' ELSE 'source_assessment' END,'scoringScope',v.provenance->>'pilot','sensitivity',v.sensitivity,'adaptiveCapacity',v.adaptive_capacity,'missingEvidence',v.missing_evidence,'confidence',v.confidence,'method',v.method,'provenance',v.provenance,'processingRunId',v.processing_run_id) AS properties FROM asset_vulnerability_assessments v JOIN energy_assets a ON a.id=v.energy_asset_id`,
+  asset_criticality: `SELECT c.id::text AS id,a.geom,jsonb_build_object('energyAssetId',a.id,'sourceDataset',a.source_dataset_key,'assetType',a.asset_type,'assetName',a.name,'status',c.status,'score',c.score,'method',c.method,'evidence',c.evidence,'confidence',c.confidence,'processingRunId',c.processing_run_id) AS properties FROM asset_criticality_assessments c JOIN energy_assets a ON a.id=c.energy_asset_id`,
+  service_dependencies: `SELECT d.id::text AS id,a.geom,jsonb_build_object('energyAssetId',a.id,'sourceDataset',a.source_dataset_key,'assetType',a.asset_type,'assetName',a.name,'criticalServiceId',s.id,'serviceType',s.service_type,'serviceName',s.name,'verified',d.verified,'confidence',d.confidence,'evidenceDatasetKey',d.evidence_dataset_key,'evidence',d.evidence) AS properties FROM service_dependencies d JOIN energy_assets a ON a.id=d.energy_asset_id JOIN critical_services s ON s.id=d.critical_service_id`,
   administrative_summaries: `SELECT s.id::text AS id,u.geom,jsonb_build_object('administrativeUnitId',u.id,'level',u.unit_level,'name',u.name,'hazardType',s.hazard_type,'eventFingerprint',s.event_fingerprint,'periodStart',s.period_start,'periodEnd',s.period_end,'assessmentStatus',s.assessment_status,'assignedAssets',s.assigned_energy_asset_count,'candidateExposedAssets',s.candidate_exposed_asset_count,'exposureFraction',s.candidate_exposure_fraction,'provenance',s.provenance,'processingRunId',s.processing_run_id) AS properties FROM administrative_hazard_summaries s JOIN administrative_units u ON u.id=s.administrative_unit_id`,
   vulnerability_summaries: `SELECT s.id::text AS id,u.geom,jsonb_build_object('administrativeUnitId',u.id,'level','ward','name',u.name,'stableCode',u.stable_code,'summaryStatus',s.summary_status,'periodStart',s.period_start,'periodEnd',s.period_end,'assetCounts',s.asset_counts,'hazardCounts',s.hazard_counts,'confidence',s.confidence,'provenance',s.provenance,'assessmentRunId',s.assessment_run_id,'compositeScore',NULL,'scoreStatus','withheld') AS properties FROM ward_vulnerability_summary s JOIN administrative_units u ON u.id=s.ward_id UNION ALL SELECT s.id::text AS id,u.geom,jsonb_build_object('administrativeUnitId',u.id,'level','county','name',u.name,'stableCode',u.stable_code,'summaryStatus',s.summary_status,'periodStart',s.period_start,'periodEnd',s.period_end,'assetCounts',s.asset_counts,'hazardCounts',s.hazard_counts,'confidence',s.confidence,'provenance',s.provenance,'assessmentRunId',s.assessment_run_id,'compositeScore',NULL,'scoreStatus','withheld') AS properties FROM county_vulnerability_summary s JOIN administrative_units u ON u.id=s.county_id`,
   interventions: `SELECT i.id::text AS id,COALESCE(i.area,a.geom) AS geom,jsonb_build_object('energyAssetId',i.energy_asset_id,'action',i.action,'priority',i.priority,'status',i.status,'reason',i.reason,'evidence',i.evidence,'assumptions',i.assumptions,'confidence',i.confidence,'processingRunId',i.processing_run_id) AS properties FROM intervention_scenarios i LEFT JOIN energy_assets a ON a.id=i.energy_asset_id`,
@@ -58,6 +62,91 @@ function validateUuid(value, label = 'id') {
   if (!uuidPattern.test(value)) throw new AppError('INVALID_ID', `${label} must be a UUID`, 400);
 }
 
+function buildAssetListFilter(query) {
+  const values = [];
+  const filters = [];
+  if (query.type) { values.push(String(query.type)); filters.push(`a.asset_type=$${values.length}`); }
+  if (query.sourceDataset) {
+    values.push(validateSourceDataset(query.sourceDataset));
+    filters.push(`a.source_dataset_key=$${values.length}`);
+  }
+  if (query.wardId || query.countyId) {
+    const level = query.wardId ? 'ward' : 'county';
+    const unitId = query.wardId || query.countyId;
+    validateUuid(unitId, `${level}Id`);
+    values.push(level, unitId);
+    filters.push(`EXISTS (SELECT 1 FROM asset_admin_assignments rel WHERE rel.energy_asset_id=a.id AND rel.unit_level=$${values.length - 1} AND rel.administrative_unit_id=$${values.length} AND rel.is_current=TRUE)`);
+  }
+  if (query.bbox) {
+    const box = bboxFilter(query.bbox, values.length + 1);
+    // bboxFilter is also used by handlers that append to an existing WHERE clause.
+    // Asset filters are joined after WHERE, so use its predicate without the leading AND.
+    filters.push(box.sql.replace(/^\s*AND\s+/i, ''));
+    values.push(...box.params);
+  }
+  return { where: filters.length ? `WHERE ${filters.join(' AND ')}` : '', values };
+}
+
+function validateSourceDataset(value) {
+  const sourceDataset = String(value).trim();
+  if (!/^[a-zA-Z0-9_-]{1,128}$/.test(sourceDataset)) {
+    throw new AppError('INVALID_SOURCE_DATASET', 'sourceDataset must contain only letters, numbers, underscores or hyphens', 400);
+  }
+  return sourceDataset;
+}
+
+function buildMapOutputFilter(layer, query) {
+  const values = [];
+  const predicates = ['geom IS NOT NULL'];
+  const sourceDatasetLayers = ['asset_exposure', 'asset_vulnerability', 'asset_criticality', 'service_dependencies'];
+  if (query.sourceDataset) {
+    if (!sourceDatasetLayers.includes(layer)) {
+      throw new AppError('UNSUPPORTED_FILTER', 'sourceDataset is supported only for asset-derived map layers', 400);
+    }
+    values.push(validateSourceDataset(query.sourceDataset));
+    predicates.push(`properties->>'sourceDataset'=$${values.length}`);
+  }
+  if (query.bbox) {
+    const filter = bboxFilter(query.bbox, values.length + 1);
+    predicates.push(filter.sql.replace(/^\s*AND\s+/i, ''));
+    values.push(...filter.params);
+  }
+  return { where: `WHERE ${predicates.join(' AND ')}`, values };
+}
+
+function mapAssetExposureRows(rows) {
+  return rows.map((row) => {
+    const provenance = parseJson(row.provenance, {});
+    const exposureScore = typeof provenance.exposure === 'number' && Number.isFinite(provenance.exposure)
+      ? provenance.exposure
+      : null;
+    return {
+      ...row,
+      provenance,
+      exposureScore,
+      exposureScoreStatus: exposureScore === null
+        ? (row.exposure_status === 'not_assessed' ? 'not_assessed' : 'not_provided')
+        : (provenance.pilot ? 'pilot_screening' : 'source_provenance'),
+      ...(provenance.pilot ? { scoringScope: provenance.pilot } : {}),
+    };
+  });
+}
+
+function mapAssetVulnerabilityRows(rows) {
+  return rows.map((row) => {
+    const provenance = parseJson(row.provenance, {});
+    const hasScore = typeof row.score === 'number' && Number.isFinite(row.score);
+    return {
+      ...row,
+      provenance,
+      scoringScope: provenance.pilot || null,
+      scoreStatus: hasScore
+        ? (provenance.pilot ? 'pilot_screening' : 'source_assessment')
+        : (row.status === 'not_assessed' ? 'not_assessed' : 'withheld'),
+    };
+  });
+}
+
 function parseJson(value, fallback = null) {
   if (value == null) return fallback;
   return typeof value === 'string' ? JSON.parse(value) : value;
@@ -70,7 +159,7 @@ const getReadiness = asyncRoute(async (_req, res) => {
   let tableStatus = {};
   let sourceCounts = {};
   let populationStatus = { status: 'not_assessed', assessmentRows: 0 };
-  let environmentalStatus = { heatObservations: 0, fireDetections: 0, nightlightObservations: 0 };
+  let environmentalStatus = { heatObservations: 0, fireDetections: 0, nightlightObservations: 0, rainfallObservations: 0 };
   if (database.connected) {
     const result = await db.query(`
       SELECT to_regclass('public.energy_assets') IS NOT NULL AS assets,
@@ -110,7 +199,8 @@ const getReadiness = asyncRoute(async (_req, res) => {
              (SELECT count(*)::int FROM flood_reference_features) AS flood_reference_features,
              (SELECT count(*)::int FROM climate_observations WHERE variable='T2M_MAX') AS heat_observations,
              (SELECT count(*)::int FROM hazard_events WHERE hazard_type='fire') AS fire_detections,
-             (SELECT count(*)::int FROM climate_observations WHERE dataset_key='nasa_viirs_black_marble_monthly') AS nightlight_observations
+             (SELECT count(*)::int FROM climate_observations WHERE dataset_key='nasa_viirs_black_marble_monthly') AS nightlight_observations,
+             (SELECT count(*)::int FROM climate_observations WHERE dataset_key='chirps_daily' AND variable IN ('CHIRPS_30D_TOTAL_MM','CHIRPS_30D_ANOMALY_MM','CHIRPS_30D_ANOMALY_PERCENT')) AS rainfall_observations
     `).catch(() => ({ rows: [{}] }));
     sourceCounts = counts.rows[0];
     environmentalStatus = {
@@ -120,7 +210,10 @@ const getReadiness = asyncRoute(async (_req, res) => {
         activeDetectionPoints: Number(sourceCounts.fire_detections || 0) },
       nightlights: { status: Number(sourceCounts.nightlight_observations || 0) > 0 ? 'available' : 'not_assessed',
         observationRows: Number(sourceCounts.nightlight_observations || 0),
-        layer: 'nightlights' }
+        layer: 'nightlights' },
+      rainfall: { status: Number(sourceCounts.rainfall_observations || 0) > 0 ? 'available' : 'not_assessed',
+        observationRows: Number(sourceCounts.rainfall_observations || 0),
+        layer: 'rainfall' }
     };
     const population = await db.query(`SELECT count(*)::int AS assessment_rows,
         max(created_at) AS latest_assessment_at,
@@ -135,7 +228,7 @@ const getReadiness = asyncRoute(async (_req, res) => {
   const prithviModelDir = path.resolve(__dirname, '../..', process.env.PRITHVI_MODEL_DIR || 'models/prithvi/flood_sen1floods11');
   const prithviCheckpoint = path.join(prithviModelDir, 'Prithvi-EO-V2-300M-TL-Sen1Floods11.pt');
   const inventoryReady = tableStatus.assets === true && tableStatus.boundaries === true;
-  const schemaReady = inventoryReady && tableStatus.assignments === true && tableStatus.hazards === true && tableStatus.summaries === true && tableStatus.hydrography === true && tableStatus.flood_reference === true && tableStatus.coverage === true && tableStatus.population_exposure === true && tableStatus.grid_resilience === true && tableStatus.ward_vulnerability_summary === true && tableStatus.county_vulnerability_summary === true;
+  const schemaReady = inventoryReady && tableStatus.assignments === true && tableStatus.hazards === true && tableStatus.summaries === true && tableStatus.hydrography === true && tableStatus.flood_reference === true && tableStatus.coverage === true && tableStatus.population_exposure === true && tableStatus.grid_resilience === true && tableStatus.ward_vulnerability_summary === true && tableStatus.county_vulnerability_summary === true && tableStatus.climate_observations === true;
   const apiReady = database.connected === true && schemaReady;
   res.json({
     service: 'oseas-climate-risk-api',
@@ -196,7 +289,8 @@ const getLayers = asyncRoute(async (_req, res) => {
     SELECT hazard_type,evidence_kind,count(*)::int AS feature_count,max(processing_run_id::text) AS latest_processing_run_id
     FROM hazard_events GROUP BY hazard_type,evidence_kind ORDER BY hazard_type,evidence_kind
   `);
-  const storedOutputs = Object.keys(mapLayerSql).map((layer) => ({ layer, evidenceKind: 'stored_derived_output', geometry: 'GeoJSON geometry', crs: 'EPSG:4326', endpoint: `/api/v1/oseas/layers/${layer}/geojson`, status: 'queryable_not_assessed_until_rows_exist' }));
+  const sourceFilterLayers = ['asset_exposure', 'asset_vulnerability', 'asset_criticality', 'service_dependencies'];
+  const storedOutputs = Object.keys(mapLayerSql).map((layer) => ({ layer, evidenceKind: 'stored_derived_output', geometry: 'GeoJSON geometry', crs: 'EPSG:4326', endpoint: `/api/v1/oseas/layers/${layer}/geojson`, ...(sourceFilterLayers.includes(layer) ? { filters: ['sourceDataset', 'bbox', 'limit', 'offset'] } : { filters: ['bbox', 'limit', 'offset'] }), status: 'queryable_not_assessed_until_rows_exist' }));
   const referenceLayers = [
     { layer: 'flood_reference', evidenceKind: 'reference_observation', endpoint: '/api/v1/oseas/layers/flood_reference/geojson' },
     { layer: 'hydrography_rivers_lakes', evidenceKind: 'reference_hydrography', endpoint: '/api/v1/oseas/layers/hydrography/geojson' },
@@ -268,9 +362,7 @@ const getMapOutputGeoJson = asyncRoute(async (req, res) => {
   const definition = mapLayerSql[req.params.layer];
   if (!definition) throw new AppError('UNKNOWN_LAYER', 'Map output layer is not registered', 404);
   const { limit, offset } = pagination(req.query);
-  const filter = bboxFilter(req.query.bbox, 1);
-  const values = filter.params;
-  const where = `WHERE geom IS NOT NULL${filter.sql}`;
+  const { where, values } = buildMapOutputFilter(req.params.layer, req.query);
   const count = await db.query(`SELECT count(*)::int AS total FROM (${definition}) AS map_layer ${where}`, values);
   const rows = await db.query(`SELECT id,properties,ST_AsGeoJSON(geom)::json AS geometry FROM (${definition}) AS map_layer ${where} ORDER BY id LIMIT $${values.length + 1} OFFSET $${values.length + 2}`, [...values, limit, offset]);
   const features = rows.rows.map((row) => ({ type: 'Feature', id: row.id, geometry: row.geometry, properties: parseJson(row.properties, {}) }));
@@ -331,22 +423,7 @@ const downloadWindResource = asyncRoute(async (req, res, next) => {
 
 const listAssets = asyncRoute(async (req, res) => {
   const { limit, offset } = pagination(req.query);
-  const values = [];
-  const filters = [];
-  if (req.query.type) { values.push(String(req.query.type)); filters.push(`a.asset_type=$${values.length}`); }
-  if (req.query.wardId || req.query.countyId) {
-    const level = req.query.wardId ? 'ward' : 'county';
-    const unitId = req.query.wardId || req.query.countyId;
-    validateUuid(unitId, `${level}Id`);
-    values.push(level, unitId);
-    filters.push(`EXISTS (SELECT 1 FROM asset_admin_assignments rel WHERE rel.energy_asset_id=a.id AND rel.unit_level=$${values.length - 1} AND rel.administrative_unit_id=$${values.length} AND rel.is_current=TRUE)`);
-  }
-  if (req.query.bbox) {
-    const box = bboxFilter(req.query.bbox, values.length + 1);
-    filters.push(box.sql);
-    values.push(...box.params);
-  }
-  const where = filters.length ? `WHERE ${filters.join(' AND ')}` : '';
+  const { where, values } = buildAssetListFilter(req.query);
   const count = await db.query(`SELECT count(*)::int AS total FROM energy_assets a ${where}`, values);
   values.push(limit, offset);
   const rows = await db.query(`
@@ -360,13 +437,17 @@ const listAssets = asyncRoute(async (req, res) => {
 const getAssetExposure = asyncRoute(async (req, res) => {
   validateUuid(req.params.id);
   const result = await db.query(`SELECT id,hazard_type,hazard_event_id,assessment_period_start,assessment_period_end,exposure_status,intersection_area_m2,intersection_length_m,distance_m,evidence_kind,confidence,provenance,processing_run_id,created_at FROM asset_hazard_exposure WHERE energy_asset_id=$1 ORDER BY created_at DESC`, [req.params.id]);
-  res.json({ assetId: req.params.id, status: result.rows.length ? 'assessed' : 'not_assessed', data: result.rows.map((row) => ({ ...row, provenance: parseJson(row.provenance, {}) })) });
+  const data = mapAssetExposureRows(result.rows);
+  res.json({ assetId: req.params.id, status: result.rows.length ? 'assessed' : 'not_assessed', data });
 });
 
 const getAssetVulnerability = asyncRoute(async (req, res) => {
   validateUuid(req.params.id);
-  const result = await db.query('SELECT * FROM asset_vulnerability_assessments WHERE energy_asset_id=$1 ORDER BY created_at DESC', [req.params.id]);
-  res.json({ assetId: req.params.id, status: result.rows.length ? result.rows[0].status : 'not_assessed', data: result.rows });
+  const result = await db.query(`SELECT id,energy_asset_id,assessment_period_start,assessment_period_end,status,vulnerability_class,score,
+      sensitivity,adaptive_capacity,missing_evidence,confidence,method,provenance,processing_run_id,created_at
+    FROM asset_vulnerability_assessments WHERE energy_asset_id=$1 ORDER BY created_at DESC`, [req.params.id]);
+  const data = mapAssetVulnerabilityRows(result.rows);
+  res.json({ assetId: req.params.id, status: data.length ? data[0].status : 'not_assessed', data });
 });
 
 const getAssetCriticality = asyncRoute(async (req, res) => {
@@ -419,4 +500,4 @@ const getPriorities = asyncRoute(async (req, res) => {
   res.json({ data: result.rows.map((row) => ({ ...row, evidence: parseJson(row.evidence, {}), assumptions: parseJson(row.assumptions, {}) })), pagination: { limit, offset }, status: result.rows.length ? 'available' : 'not_assessed' });
 });
 
-module.exports = { getReadiness, getCatalog, getRuns, getRun, getLayers, getFloodGeoJson, getHydrographyGeoJson, getFloodReferenceGeoJson, getMapOutputGeoJson, getPopulationExposureGeoJson, getWindResourceManifest, downloadWindResource, listAssets, getAssetExposure, getAssetVulnerability, getAssetCriticality, getAssetServiceDependencies, getAdminSummary, getPriorities };
+module.exports = { getReadiness, getCatalog, getRuns, getRun, getLayers, getFloodGeoJson, getHydrographyGeoJson, getFloodReferenceGeoJson, getMapOutputGeoJson, getPopulationExposureGeoJson, getWindResourceManifest, downloadWindResource, listAssets, getAssetExposure, getAssetVulnerability, getAssetCriticality, getAssetServiceDependencies, getAdminSummary, getPriorities, buildAssetListFilter, buildMapOutputFilter, mapAssetExposureRows, mapAssetVulnerabilityRows };

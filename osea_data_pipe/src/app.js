@@ -16,6 +16,9 @@ const healthController = require("./health/healthController");
 const v1Router = require("./routes");
 
 const app = express();
+// Trust only the explicitly configured number of reverse-proxy hops so client IP
+// rate limits work behind the selected host without trusting arbitrary headers.
+app.set('trust proxy', config.TRUST_PROXY_HOPS);
 
 // 1. Security Headers via Helmet
 app.use(
@@ -28,15 +31,14 @@ app.use(
 // 2. CORS Configuration
 app.use(
   cors({
-    origin: config.CORS_ORIGIN === '*' ? true : config.CORS_ORIGIN.split(','),
-    methods: ['GET', 'POST', 'PATCH', 'OPTIONS'],
+    // Wildcard access is permitted only for local development. Production
+    // config validation requires explicit HTTPS origins.
+    origin: config.CORS_ORIGIN === '*' ? true : config.CORS_ORIGIN.split(',').map((origin) => origin.trim()).filter(Boolean),
+    methods: ['GET', 'OPTIONS'],
     allowedHeaders: [
       'Content-Type',
       'Authorization',
       'X-Request-ID',
-      'X-User-Role',
-      'X-User-Id',
-      'X-User-Name',
     ],
     credentials: true,
   }),
@@ -85,6 +87,10 @@ const getEngineInfo = (req, res) => {
         readiness: "/api/v1/oseas/readiness",
         catalog: "/api/v1/oseas/catalog",
         assets: "/api/v1/oseas/assets",
+        asset_vulnerability: "/api/v1/oseas/assets/{id}/vulnerability",
+        asset_exposure: "/api/v1/oseas/assets/{id}/exposure",
+        vulnerability_layer: "/api/v1/oseas/layers/asset_vulnerability/geojson",
+        layers: "/api/v1/oseas/layers",
         flood_candidates: "/api/v1/oseas/layers/flood_candidate/geojson",
         flood_reference: "/api/v1/oseas/layers/flood_reference/geojson",
         hydrography: "/api/v1/oseas/layers/hydrography/geojson",

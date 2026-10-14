@@ -27,6 +27,7 @@
     "oseas:assessments": "python scripts/run_evidence_assessments.py",
     "oseas:heat": "python scripts/ingest_nasa_power_heat.py",
     "oseas:nightlights": "python scripts/ingest_viirs_black_marble.py",
+    "oseas:rainfall": "python scripts/ingest_chirps_rainfall.py",
     "oseas:fire": "python scripts/ingest_firms_fire.py",
     "oseas:pipeline": "python scripts/run_oseas_pipeline.py",
     "oseas:wind:sync": "python scripts/sync_global_wind_atlas.py",

@@ -1,0 +1,34 @@
+services:
+  - type: web
+    name: oseas-climate-risk-api
+    runtime: node
+    rootDir: osea_data_pipe
+    region: frankfurt
+    plan: free
+    buildCommand: npm ci && npm run build
+    startCommand: npm start
+    healthCheckPath: /health/ready
+    maxShutdownDelaySeconds: 30
+    envVars:
+      - key: NODE_ENV
+        value: production
+      - key: HOST
+        value: 0.0.0.0
+      - key: TRUST_PROXY_HOPS
+        value: "1"
+      - key: RATE_LIMIT_MAX
+        value: "200"
+      - key: DB_POOL_MIN
+        value: "0"
+      - key: DB_POOL_MAX
+        value: "8"
+      - key: DB_TIMEOUT_MS
+        value: "4000"
+      - key: DB_URL
+        sync: false
+      - key: SUPABASE_URL
+        sync: false
+      - key: SUPABASE_SERVICE_ROLE_KEY
+        sync: false
+      - key: CORS_ORIGIN
+        sync: false

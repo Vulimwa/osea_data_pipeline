@@ -5,6 +5,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import re
 import subprocess
 import sys
 import time
@@ -65,6 +66,74 @@ def python_run(script: str, *arguments: str) -> list[str]:
     return [sys.executable, script, *arguments]
 
 
+def active_python_processes(script_fragment: str) -> list[str]:
+    """Find an existing source job before starting a duplicate acquisition."""
+    if os.name == "nt":
+        command = (
+            "$items = @(Get-CimInstance Win32_Process | Where-Object { "
+            r"$_.Name -match '^python(w)?(\.exe)?$' -and $_.CommandLine -match "
+            f"'{re.escape(script_fragment)}'"
+            "} | Select-Object -ExpandProperty ProcessId); "
+            "ConvertTo-Json -Compress -InputObject $items"
+        )
+        result = subprocess.run(["powershell", "-NoProfile", "-Command", command],
+                                capture_output=True, text=True, timeout=15, check=False)
+        if result.returncode != 0:
+            raise RuntimeError("Could not check for an active source-processing process")
+        output = result.stdout.strip()
+        if not output:
+            return []
+        try:
+            process_ids = json.loads(output)
+        except json.JSONDecodeError as error:
+            raise RuntimeError("Could not parse the active source-process check") from error
+        if process_ids is None:
+            return []
+        if not isinstance(process_ids, list):
+            process_ids = [process_ids]
+        return [str(pid) for pid in process_ids]
+
+    proc_root = Path("/proc")
+    if not proc_root.exists():
+        return []
+    active = []
+    for entry in proc_root.iterdir():
+        if not entry.name.isdigit():
+            continue
+        try:
+            command_line = (entry / "cmdline").read_bytes().replace(b"\0", b" ").decode(errors="replace")
+        except OSError:
+            continue
+        if script_fragment in command_line and "run_oseas_pipeline.py" not in command_line:
+            active.append(entry.name)
+    return active
+
+
+def build_report(stages: list[dict[str, object]], started_at: str) -> dict[str, object]:
+    incomplete = [stage for stage in stages if stage["status"] in {"failed", "blocked"}]
+    return {
+        "status": "partial" if incomplete else "completed_with_limitations",
+        "started_at": started_at,
+        "stages": stages,
+        "incomplete_stage_count": len(incomplete),
+        "unsupported_or_unconfigured_sources": [
+            "Landsat land-surface temperature (NASA POWER provides air temperature only)",
+            "burned-area perimeters and independent fire-damage evidence",
+            "standalone ERA5 outputs and reusable national DEM-derived drainage metrics",
+            "validated Kenya-specific Prithvi metrics and verified feeder/outage records",
+        ],
+        "duplication_policy": "Stable source keys, deterministic assessment IDs, source-content fingerprints and source-specific locks; same-input outputs are upserted or resumed.",
+    }
+
+
+def write_report(report: dict[str, object]) -> None:
+    report_path = ROOT / "outputs" / "last_pipeline_run.json"
+    report_path.parent.mkdir(parents=True, exist_ok=True)
+    report_path.write_text(json.dumps(report, indent=2), encoding="utf-8")
+    print("\nOSEAS PIPELINE SUMMARY", flush=True)
+    print(json.dumps(report, indent=2), flush=True)
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--skip-earth-engine", action="store_true", help="Use already-ingested source features")
@@ -75,6 +144,7 @@ def main() -> int:
     acquire_lock()
     try:
         if not run_stage("database preflight", ["node", "scripts/setup_database.js"], stages):
+            write_report(build_report(stages, pipeline_started_at))
             return 1
 
         ingestion_ok = True
@@ -91,16 +161,26 @@ def main() -> int:
             stages.append({"stage": "asset-to-county-and-ward assignment", "status": "blocked", "reason": "source ingestion failed"})
             stages.append({"stage": "NASA POWER heat acquisition and exposure", "status": "blocked", "reason": "no configured asset inventory update completed"})
 
-        ntl_token = os.getenv("NASA_EARTHDATA_TOKEN", "").strip() or os.getenv("LAAD_TOKEN_NASA", "").strip()
         ntl_start = os.getenv("OSEAS_NTL_START_MONTH", "").strip()
         ntl_end = os.getenv("OSEAS_NTL_END_MONTH", "").strip()
-        if ntl_token and ntl_start and ntl_end:
+        try:
+            active_ntl = active_python_processes("ingest_viirs_black_marble.py")
+        except RuntimeError as error:
+            active_ntl = [f"process check failed: {error}"]
+        if active_ntl:
+            reason = f"an existing Black Marble process is active ({','.join(active_ntl)}); wait for it instead of starting a duplicate"
+            print(f"\n[NASA VIIRS Black Marble monthly radiance and context] BLOCKED: {reason}", flush=True)
+            stages.append({"stage": "NASA VIIRS Black Marble monthly radiance and context", "status": "blocked", "reason": reason})
+        elif ntl_start and ntl_end:
             run_stage("NASA VIIRS Black Marble monthly radiance and context", python_run("scripts/ingest_viirs_black_marble.py"), stages)
         else:
             stages.append({"stage": "NASA VIIRS Black Marble monthly radiance and context", "status": "blocked",
-              "reason": "NASA_EARTHDATA_TOKEN or LAAD_TOKEN_NASA and manifest-verified OSEAS_NTL_START_MONTH/OSEAS_NTL_END_MONTH are required"})
+              "reason": "Manifest-verified OSEAS_NTL_START_MONTH and OSEAS_NTL_END_MONTH are required; Earth Engine authentication is checked by the adapter (no NASA LAADS token is needed)"})
 
         unosat_ok = run_stage("UNOSAT flood reference ingest", python_run("scripts/ingest_unosat_flood_reference.py"), stages)
+
+        run_stage("CHIRPS 30-day rainfall totals and anomalies by county and ward",
+                  python_run("scripts/ingest_chirps_rainfall.py"), stages)
 
         worldpop_file = ROOT / "data" / "raw" / "worldpop" / "ken_pop_2024_CN_100m_R2025A_v1.tif"
         if args.skip_worldpop_download:
@@ -141,18 +221,8 @@ def main() -> int:
             stages.append({"stage": "Sentinel-1 flood screening", "status": "blocked",
               "reason": "set OSEAS_FLOOD_BBOX, OSEAS_FLOOD_EVENT_START/END and OSEAS_FLOOD_BASELINE_START/END; no national dates or AOI are inferred"})
 
-        report = {"status": "completed_with_limitations" if all(stage["status"] in {"completed", "skipped", "blocked"} for stage in stages) else "partial",
-                  "started_at": pipeline_started_at,
-                  "stages": stages,
-                  "unsupported_or_unconfigured_sources": ["Landsat land-surface temperature (NASA POWER provides air temperature only)",
-                    "FIRMS acquisition is blocked without map key", "burned-area products",
-                    "CHIRPS anomaly products", "reusable national terrain and drainage"],
-                  "duplication_policy": "Source feature keys, raster-content assessment keys, deterministic assessment IDs and importer advisory locks; same-input outputs are upserted or ignored."}
-        report_path = ROOT / "outputs" / "last_pipeline_run.json"
-        report_path.parent.mkdir(parents=True, exist_ok=True)
-        report_path.write_text(json.dumps(report, indent=2), encoding="utf-8")
-        print("\nOSEAS PIPELINE SUMMARY")
-        print(json.dumps(report, indent=2))
+        report = build_report(stages, pipeline_started_at)
+        write_report(report)
         return 0 if report["status"] == "completed_with_limitations" else 1
     finally:
         LOCK.unlink(missing_ok=True)

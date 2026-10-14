@@ -26,6 +26,7 @@ const configSchema = z.object({
   // Rate limiting
   RATE_LIMIT_WINDOW_MS: z.coerce.number().default(15 * 60 * 1000),
   RATE_LIMIT_MAX: z.coerce.number().default(500),
+  TRUST_PROXY_HOPS: z.coerce.number().int().min(0).max(5).default(0),
 
   // Database
   DB_URL: z.string().optional(),
@@ -70,3 +71,38 @@ try {
 }
 
 module.exports = Object.freeze(parsedConfig);
+
+// Refuse to start a publicly hosted production API with missing auth, database,
+// or browser-origin settings. These checks intentionally validate only presence
+// and shape; secret values are never logged.
+if (parsedConfig.NODE_ENV === "production") {
+  const configurationErrors = [];
+  if (!(parsedConfig.DB_URL || parsedConfig.DATABASE_URL || parsedConfig.SUPABASE_DB_URL)) {
+    configurationErrors.push("DB_URL (or DATABASE_URL / SUPABASE_DB_URL)");
+  }
+  if (!parsedConfig.SUPABASE_URL) configurationErrors.push("SUPABASE_URL");
+  if (!parsedConfig.SUPABASE_SERVICE_ROLE_KEY) configurationErrors.push("SUPABASE_SERVICE_ROLE_KEY");
+
+  const origins = parsedConfig.CORS_ORIGIN.split(",").map((origin) => origin.trim()).filter(Boolean);
+  if (origins.length === 0 || origins.includes("*")) {
+    configurationErrors.push("CORS_ORIGIN (explicit frontend origin; wildcard is not allowed)");
+  } else {
+    for (const origin of origins) {
+      try {
+        const parsedOrigin = new URL(origin);
+        const isLocalDevelopmentOrigin = ["localhost", "127.0.0.1"].includes(parsedOrigin.hostname);
+        if (parsedOrigin.origin !== origin || (parsedOrigin.protocol !== "https:" && !isLocalDevelopmentOrigin)) {
+          configurationErrors.push("CORS_ORIGIN (HTTPS origins only, except localhost)");
+          break;
+        }
+      } catch {
+        configurationErrors.push("CORS_ORIGIN (comma-separated origin URLs only)");
+        break;
+      }
+    }
+  }
+
+  if (configurationErrors.length > 0) {
+    throw new Error(`Production configuration is incomplete or unsafe: ${configurationErrors.join(", ")}`);
+  }
+}
