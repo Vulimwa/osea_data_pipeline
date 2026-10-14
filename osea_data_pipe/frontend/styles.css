@@ -1,0 +1,61 @@
+@import 'tailwindcss';
+@import 'maplibre-gl/dist/maplibre-gl.css';
+
+:root {
+  --ink: #0c1a1f;
+  --mist: #e8f1f0;
+  --lake: #1a6b6b;
+  --flood: #c45c26;
+  --flood-soft: #e8a06a;
+  --safe: #3d6b4f;
+  --unknown: #6b7280;
+  --panel: rgba(12, 26, 31, 0.82);
+  --line: rgba(232, 241, 240, 0.14);
+  font-family: 'Outfit', system-ui, sans-serif;
+  color: var(--mist);
+  background: var(--ink);
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body,
+#root {
+  height: 100%;
+  margin: 0;
+}
+
+body {
+  background:
+    radial-gradient(1200px 600px at 10% -10%, rgba(26, 107, 107, 0.35), transparent 55%),
+    radial-gradient(900px 500px at 90% 0%, rgba(196, 92, 38, 0.18), transparent 50%),
+    var(--ink);
+}
+
+h1,
+h2,
+.brand {
+  font-family: 'Fraunces', Georgia, serif;
+  font-optical-sizing: auto;
+}
+
+.maplibregl-popup-content {
+  background: var(--panel);
+  color: var(--mist);
+  border: 1px solid var(--line);
+  border-radius: 2px;
+  padding: 0.65rem 0.8rem;
+  box-shadow: none;
+  font-family: 'Outfit', system-ui, sans-serif;
+}
+
+.maplibregl-popup-tip {
+  border-top-color: var(--panel) !important;
+}
+
+.maplibregl-ctrl-attrib {
+  background: transparent !important;
+  color: rgba(232, 241, 240, 0.45) !important;
+}
