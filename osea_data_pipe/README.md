@@ -29,7 +29,6 @@ The flood method is an unvalidated candidate screen, not confirmed inundation or
 - [`docs/DATA_CATALOG.md`](docs/DATA_CATALOG.md): public sources, access, metadata and validation state.
 - [`docs/MODEL_CARD.md`](docs/MODEL_CARD.md): flood method and Prithvi status.
 - [`docs/API_CONTRACTS.md`](docs/API_CONTRACTS.md): stable read-only endpoints and GeoJSON format.
-- [`docs/LEGACY_CODE_AUDIT.md`](docs/LEGACY_CODE_AUDIT.md): legacy Kilimani modules removed from the pipeline.
 - [`docs/INTEGRATION_READINESS.md`](docs/INTEGRATION_READINESS.md): evidence-based integration status.
 - [`docs/END_TO_END_RUNBOOK.md`](docs/END_TO_END_RUNBOOK.md): reproducible commands and troubleshooting.
 
