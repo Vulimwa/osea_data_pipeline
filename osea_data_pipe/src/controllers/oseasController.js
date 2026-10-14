@@ -62,6 +62,7 @@ const getReadiness = asyncRoute(async (_req, res) => {
   let latestFloodRun = null;
   let tableStatus = {};
   let sourceCounts = {};
+  let populationStatus = { status: 'not_assessed', assessmentRows: 0 };
   if (database.connected) {
     const result = await db.query(`
       SELECT to_regclass('public.energy_assets') IS NOT NULL AS assets,
@@ -98,6 +99,15 @@ const getReadiness = asyncRoute(async (_req, res) => {
              (SELECT count(*)::int FROM flood_reference_features) AS flood_reference_features
     `).catch(() => ({ rows: [{}] }));
     sourceCounts = counts.rows[0];
+    const population = await db.query(`SELECT count(*)::int AS assessment_rows,
+        max(created_at) AS latest_assessment_at,
+        count(*) FILTER (WHERE assessment_status='partial')::int AS partial_rows,
+        count(*) FILTER (WHERE assessment_status='unknown')::int AS unknown_rows
+      FROM population_exposure_assessments`).catch(() => ({ rows: [] }));
+    if (population.rows[0]) populationStatus = {
+      status: population.rows[0].assessment_rows > 0 ? 'available' : 'not_assessed',
+      ...population.rows[0],
+    };
   }
   const prithviModelDir = path.resolve(__dirname, '../..', process.env.PRITHVI_MODEL_DIR || 'models/prithvi/flood_sen1floods11');
   const prithviCheckpoint = path.join(prithviModelDir, 'Prithvi-EO-V2-300M-TL-Sen1Floods11.pt');
@@ -112,6 +122,7 @@ const getReadiness = asyncRoute(async (_req, res) => {
       database: database.connected ? { status: 'ok', postgisVersion: database.postgis_version } : { status: 'unavailable' },
       sourceIngestion: sourceRun ? { status: sourceRun.status, startedAt: sourceRun.started_at, finishedAt: sourceRun.finished_at } : { status: 'not_run' },
       sourceCounts,
+      populationExposure: populationStatus,
       inventory: { status: inventoryReady ? 'available' : 'incomplete' },
       outputSchema: { status: schemaReady ? 'installed' : 'incomplete', tables: tableStatus },
       latestFloodScreen: latestFloodRun ? { status: latestFloodRun.status, runId: latestFloodRun.id, candidatePolygons: latestFloodRun.polygon_count, exposureRows: latestFloodRun.exposure_count } : { status: 'not_run' },
@@ -128,7 +139,8 @@ const getCatalog = asyncRoute(async (_req, res) => {
   const dbRows = await db.query('SELECT dataset_key,last_ingested_at FROM datasets ORDER BY dataset_key').catch(() => ({ rows: [] }));
   const byKey = new Map(dbRows.rows.map((row) => [row.dataset_key, row.last_ingested_at]));
   const windCached = fs.existsSync(path.join(windCacheDir, 'manifest.json'));
-  res.json({ data: catalog.map((source) => ({ ...source, retrieval_status: byKey.has(source.key) ? 'retrieved_in_persisted_run' : (windCached && source.key.startsWith('global_wind_atlas_') ? 'retrieved_and_cached' : source.retrieval_status), lastSuccessfulRun: byKey.get(source.key) || null })), count: catalog.length });
+  const worldpopCached = fs.existsSync(path.resolve(__dirname, '../..', 'data/raw/worldpop/ken_pop_2024_CN_100m_R2025A_v1.json'));
+  res.json({ data: catalog.map((source) => ({ ...source, retrieval_status: byKey.has(source.key) ? 'retrieved_in_persisted_run' : (worldpopCached && source.key === 'worldpop_global2_kenya_population_100m' ? 'downloaded_and_validated_locally_not_persisted' : (windCached && source.key.startsWith('global_wind_atlas_') ? 'retrieved_and_cached' : source.retrieval_status)), lastSuccessfulRun: byKey.get(source.key) || null })), count: catalog.length });
 });
 
 const getRuns = asyncRoute(async (req, res) => {
@@ -241,6 +253,41 @@ const getMapOutputGeoJson = asyncRoute(async (req, res) => {
   res.json({ type: 'FeatureCollection', features, count: features.length, pagination: { total: count.rows[0].total, limit, offset }, spatialReference: 'EPSG:4326', layer: req.params.layer, status: features.length ? 'available' : 'not_assessed' });
 });
 
+const getPopulationExposureGeoJson = asyncRoute(async (req, res) => {
+  const { limit, offset } = pagination(req.query);
+  const values = [];
+  const predicates = ['geom IS NOT NULL'];
+  if (req.query.eventKey) { values.push(String(req.query.eventKey)); predicates.push(`evidence->>'eventKey'=$${values.length}`); }
+  if (req.query.reportingUnitId) { validateUuid(String(req.query.reportingUnitId), 'reportingUnitId'); values.push(String(req.query.reportingUnitId)); predicates.push(`reporting_unit_id=$${values.length}`); }
+  if (req.query.status) {
+    const status = String(req.query.status);
+    if (!['assessed', 'partial', 'unknown', 'not_assessed'].includes(status)) throw new AppError('INVALID_STATUS', 'status must be assessed, partial, unknown or not_assessed', 400);
+    values.push(status); predicates.push(`assessment_status=$${values.length}`);
+  }
+  if (req.query.bbox) {
+    const filter = bboxFilter(req.query.bbox, values.length + 1);
+    values.push(...filter.params);
+    const first = values.length - 3;
+    predicates.push(`ST_Intersects(geom,ST_MakeEnvelope($${first},$${first + 1},$${first + 2},$${first + 3},4326))`);
+  }
+  const where = `WHERE ${predicates.join(' AND ')}`;
+  const count = await db.query(`SELECT count(*)::int AS total FROM population_exposure_assessments ${where}`, values);
+  const rows = await db.query(`SELECT id,dataset_key,hazard_event_id,reporting_unit_id,population_total,population_potentially_exposed,
+      assessment_status,method,evidence,confidence,processing_run_id,created_at,ST_AsGeoJSON(geom)::json AS geometry
+    FROM population_exposure_assessments ${where} ORDER BY created_at DESC,id LIMIT $${values.length + 1} OFFSET $${values.length + 2}`,
+  [...values, limit, offset]);
+  const features = rows.rows.map((row) => ({ type: 'Feature', id: row.id, geometry: row.geometry, properties: {
+    datasetKey: row.dataset_key, hazardEventId: row.hazard_event_id, reportingUnitId: row.reporting_unit_id,
+    populationTotal: row.population_total, populationPotentiallyExposed: row.population_potentially_exposed,
+    populationUnit: 'estimated persons', assessmentStatus: row.assessment_status, method: row.method,
+    evidence: parseJson(row.evidence, {}), confidence: row.confidence, processingRunId: row.processing_run_id,
+    createdAt: row.created_at,
+  } }));
+  res.json({ type: 'FeatureCollection', features, count: features.length,
+    pagination: { total: count.rows[0].total, limit, offset }, spatialReference: 'EPSG:4326', layer: 'population_exposure',
+    status: features.length ? 'available' : 'not_assessed', evidenceKind: 'modeled_population_estimate' });
+});
+
 const getWindResourceManifest = asyncRoute(async (_req, res) => {
   const manifestPath = path.join(windCacheDir, 'manifest.json');
   if (!fs.existsSync(manifestPath)) return res.json({ status: 'not_cached', products: Object.keys(windProducts).map((key) => ({ id: key, ...windProducts[key] })), syncCommand: 'npm run oseas:wind:sync' });
@@ -320,4 +367,4 @@ const getPriorities = asyncRoute(async (req, res) => {
   res.json({ data: result.rows.map((row) => ({ ...row, evidence: parseJson(row.evidence, {}), assumptions: parseJson(row.assumptions, {}) })), pagination: { limit, offset }, status: result.rows.length ? 'available' : 'not_assessed' });
 });
 
-module.exports = { getReadiness, getCatalog, getRuns, getRun, getLayers, getFloodGeoJson, getHydrographyGeoJson, getFloodReferenceGeoJson, getMapOutputGeoJson, getWindResourceManifest, downloadWindResource, listAssets, getAssetExposure, getAssetVulnerability, getAdminSummary, getPriorities };
+module.exports = { getReadiness, getCatalog, getRuns, getRun, getLayers, getFloodGeoJson, getHydrographyGeoJson, getFloodReferenceGeoJson, getMapOutputGeoJson, getPopulationExposureGeoJson, getWindResourceManifest, downloadWindResource, listAssets, getAssetExposure, getAssetVulnerability, getAdminSummary, getPriorities };

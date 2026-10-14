@@ -14,7 +14,7 @@ async function main() {
   const result = await db.query(`
     SELECT table_name, column_name FROM information_schema.columns
     WHERE table_schema = 'public' AND table_name = ANY($1::text[])
-  `, [["datasets", "ingestion_runs", "dataset_versions", "data_quality_checks", "energy_assets", "network_lines", "substations", "distribution_transformers", "power_stations", "mini_grids", "critical_services", "administrative_units", "asset_admin_assignments", "hazard_events", "flood_extents", "asset_hazard_exposure", "model_runs", "administrative_hazard_summaries", "hydrography_features", "flood_reference_features", "spatial_coverage_assessments", "population_exposure_assessments", "grid_resilience_assessments"]]);
+  `, [["datasets", "ingestion_runs", "dataset_versions", "data_quality_checks", "energy_assets", "network_lines", "substations", "distribution_transformers", "power_stations", "mini_grids", "critical_services", "service_dependencies", "administrative_units", "asset_admin_assignments", "climate_observations", "climate_projections", "hazard_events", "flood_extents", "fire_events", "terrain_metrics", "land_cover_metrics", "model_runs", "asset_hazard_exposure", "asset_vulnerability_assessments", "asset_criticality_assessments", "service_dependency_assessments", "ward_vulnerability_summary", "county_vulnerability_summary", "administrative_hazard_summaries", "intervention_scenarios", "assessment_provenance", "hydrography_features", "flood_reference_features", "spatial_coverage_assessments", "population_exposure_assessments", "grid_resilience_assessments"]]);
   const columns = new Map();
   for (const row of result.rows) {
     if (!columns.has(row.table_name)) columns.set(row.table_name, new Set());
@@ -42,8 +42,16 @@ async function main() {
     hydrography_features: ["id", "dataset_key", "source_feature_id", "feature_type", "source_properties", "geom", "processing_run_id"],
     flood_reference_features: ["id", "dataset_key", "source_feature_id", "event_key", "event_date", "source_properties", "event_metadata", "geom", "processing_run_id"],
     spatial_coverage_assessments: ["id", "coverage_status", "area_coverage_fraction", "valid_data_fraction", "observation_footprint", "valid_data_footprint", "validation_status", "provenance"],
-    population_exposure_assessments: ["id", "population_total", "population_potentially_exposed", "assessment_status", "geom", "processing_run_id"],
+    population_exposure_assessments: ["id", "dataset_key", "hazard_event_id", "reporting_unit_id", "population_total", "population_potentially_exposed", "assessment_status", "method", "evidence", "geom", "processing_run_id"],
     grid_resilience_assessments: ["id", "assessment_status", "score", "criteria", "geom", "processing_run_id"],
+    service_dependencies: ["energy_asset_id", "critical_service_id", "evidence_dataset_key", "evidence", "confidence", "verified"],
+    service_dependency_assessments: ["energy_asset_id", "critical_service_id", "status", "evidence", "confidence", "processing_run_id"],
+    asset_vulnerability_assessments: ["energy_asset_id", "status", "vulnerability_class", "score", "sensitivity", "adaptive_capacity", "missing_evidence", "provenance"],
+    asset_criticality_assessments: ["energy_asset_id", "status", "score", "method", "evidence", "confidence"],
+    ward_vulnerability_summary: ["ward_id", "assessment_run_id", "summary_status", "asset_counts", "hazard_counts", "provenance"],
+    county_vulnerability_summary: ["county_id", "assessment_run_id", "summary_status", "asset_counts", "hazard_counts", "provenance"],
+    intervention_scenarios: ["id", "energy_asset_id", "action", "status", "reason", "evidence", "assumptions", "processing_run_id"],
+    assessment_provenance: ["assessment_table", "assessment_id", "dataset_key", "dataset_version_id", "model_run_id", "parameters"],
   };
   const missing = [];
   for (const [table, requiredColumns] of Object.entries(required)) {

@@ -23,6 +23,7 @@ The single machine-readable registry is [`../config/data_catalog.json`](../confi
 | Historical flood events, EM-DAT / ReliefWeb | `historical_flood_events` | Registration/download or public API | Access and event spatial detail remain under review; records alone are not flood polygons. [EM-DAT](https://www.emdat.be/), [ReliefWeb API](https://apidoc.reliefweb.int/) |
 | Active-fire detections, NASA FIRMS | `nasa_firms_active_fire` | FIRMS API | Blocked until a server-side `NASA_FIRMS_MAP_KEY` is configured and adapter/coverage checks are implemented. [API](https://firms.modaps.eosdis.nasa.gov/api/) |
 | Burned area, MODIS MCD64A1 | `modis_burned_area` / `MODIS/061/MCD64A1` | Earth Engine collection | Read-only smoke audit retrieved 12 images. No fire exposure module is implemented. [Catalog](https://developers.google.com/earth-engine/datasets/catalog/MODIS_061_MCD64A1) |
+| Population counts, WorldPop Global2 R2025A | `worldpop_global2_kenya_population_100m` | Public Kenya GeoTIFF, annual 100 m count raster | Download adapter and zonal event/admin processor implemented. Current download and local preview are still in progress; no result has been persisted. Estimates are residents within a reference footprint, not verified impacts or energy-service population. R2025A v1 is alpha; CC BY 4.0 attribution required. [WorldPop product](https://hub.worldpop.org/geodata/listing?id=135), [catalog](https://hub.worldpop.org/project/categories?id=3) |
 
 ## Acceptance and status rules
 
@@ -50,4 +51,4 @@ The supplied Global Wind Atlas country GeoJSON URL returned HTTP 400 at audit ti
 
 `npm run oseas:wind:sync` is the bounded, repeatable cache adapter. It validates file type, raster readability, coordinate reference, dimensions, bounds and sampled valid pixels, and writes checksums and metadata to the ignored local data directory. After cache, `/api/v1/oseas/layers/wind_resource` lists map URLs and `/geotiff` routes stream each raster. Production deployments must provide durable shared storage for the raster directory if API instances are not colocated with the cache.
 
-No source is yet accepted for population exposure, service dependency, drought scoring, heat stress, future projections or wildfire exposure. Those outputs remain `NOT_ASSESSED` until acquisition, units, coverage and validation are implemented.
+Population exposure now has a source-specific WorldPop adapter and an implemented cell-center zonal processor; actual acquisition/processing/persistence remains in progress. Service dependency has a schema and route but lacks verified link data. Drought scoring, heat stress, future projections and wildfire exposure remain unassessed pending their own processing adapters and validation.

@@ -20,6 +20,7 @@ Base path: `/api/v1/oseas`. Routes are read-only; processing is started through 
 
 | `GET /layers/flood_reference/geojson?eventKey=FL-20231121-KEN-03&bbox=...&limit=100&offset=0` | Optional event key, EPSG:4326 bbox and pagination | Source-preserving reference polygons with original properties, event/run provenance, geometry-measured area, and separately attributed event-level reported area/population. Reference evidence remains separate from model candidates. |
 | `GET /layers/hydrography/geojson?type=river\|lake&bbox=...&limit=100&offset=0` | Optional type, bbox and pagination | Mappable rivers/lakes with source identifiers/properties and ingest run. Source GeometryCollections are preserved. |
+| `GET /layers/population_exposure/geojson?eventKey=...&reportingUnitId={uuid}&status=assessed&bbox=...&limit=100&offset=0` | Optional event key, reporting-unit UUID, status, bbox and pagination | WorldPop estimated residents within an observed flood footprint. `populationPotentiallyExposed` is an estimated person count; `populationTotal` remains null until a full-unit denominator is implemented. Evidence carries population year, source checksum, valid-raster fraction, method and interpretation limits. |
 | `GET /layers/{climate_observations\|climate_projections\|terrain\|land_cover\|fire\|asset_exposure\|asset_vulnerability\|asset_criticality\|service_dependencies\|administrative_summaries\|interventions\|population_exposure\|grid_resilience\|coverage}/geojson?bbox=...&limit=100&offset=0` | Registered layer key; optional EPSG:4326 bbox and pagination | Common map-ready GeoJSON from durable output records. Empty output returns `status=not_assessed`; properties retain method, source, run, coverage and uncertainty fields that exist for that output. |
 | `GET /layers/wind_resource` | None | Cache manifest with GeoTIFF URLs, units, CRS, bounds, dimensions, checksums and retrieval metadata; returns `not_cached` plus sync command before download. These layers show resource context, not wind hazards. |
 | `GET /layers/wind_resource/{wind_speed_10m\|power_density_10m\|air_density_10m}/geotiff` | Product ID path | Cached GeoTIFF bytes (`image/tiff`) for GeoTIFF-capable map clients. Populate with `npm run oseas:wind:sync`. |
@@ -34,6 +35,7 @@ GET /api/v1/oseas/layers/flood_reference/geojson?eventKey=FL-20231121-KEN-03
 GET /api/v1/oseas/layers/hydrography/geojson?type=lake
 GET /api/v1/oseas/layers/coverage/geojson
 GET /api/v1/oseas/layers/asset_exposure/geojson
+GET /api/v1/oseas/layers/population_exposure/geojson?eventKey=FL20240421KEN
 GET /api/v1/oseas/layers/wind_resource
 GET /api/v1/oseas/administrative/county/{county-uuid}/summary
 ```

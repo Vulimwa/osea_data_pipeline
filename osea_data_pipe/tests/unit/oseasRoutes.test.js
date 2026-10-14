@@ -30,3 +30,15 @@ test('flood map route validates bbox before querying persisted results', async (
   assert.equal(response.status, 400);
   assert.equal(response.body.error.code, 'INVALID_BBOX');
 });
+
+test('population exposure layer validates reporting-unit UUID before querying persisted results', async () => {
+  const response = await request(app).get('/api/v1/oseas/layers/population_exposure/geojson?reportingUnitId=bad');
+  assert.equal(response.status, 400);
+  assert.equal(response.body.error.code, 'INVALID_ID');
+});
+
+test('population exposure layer rejects unsupported assessment statuses', async () => {
+  const response = await request(app).get('/api/v1/oseas/layers/population_exposure/geojson?status=excellent');
+  assert.equal(response.status, 400);
+  assert.equal(response.body.error.code, 'INVALID_STATUS');
+});

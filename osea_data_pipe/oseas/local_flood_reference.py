@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 import hashlib
+import itertools
 import json
+import os
 import re
 import threading
 import time
@@ -20,6 +22,10 @@ from shapely import wkb
 DATASET_KEY = "kenya_flood_2024_unosat"
 EVENT_KEY_FALLBACK = "FL20240426KEN"
 DEFAULT_SOURCE_DIR = Path(__file__).resolve().parents[1] / "KENYA_FLOOD_2024_SHP_UNOSAT"
+# UNOSAT flood products are derived from 10 m imagery. Keep the source bundles
+# untouched and retain their checksums, but reduce sub-pixel boundary detail in
+# the operational geometry so PostGIS validation and spatial joins stay bounded.
+GEOMETRY_SIMPLIFY_TOLERANCE_DEGREES = float(os.getenv("UNOSAT_SIMPLIFY_TOLERANCE_DEGREES", "0.00005"))
 
 
 def selected_files(source_dir: Path) -> list[Path]:
@@ -113,6 +119,12 @@ def read_reference_features(source_dir: Path = DEFAULT_SOURCE_DIR, *, progress: 
                     geom = transform(transformer, geom)
                 if geom.geom_type not in {"Polygon", "MultiPolygon"} or geom.is_empty:
                     raise ValueError(f"Expected a non-empty polygon in {path.name}; found {geom.geom_type}")
+                source_vertex_count = sum(len(part.exterior.coords) + sum(len(ring.coords) for ring in part.interiors)
+                                          for part in ([geom] if geom.geom_type == "Polygon" else geom.geoms))
+                if GEOMETRY_SIMPLIFY_TOLERANCE_DEGREES > 0:
+                    geom = geom.simplify(GEOMETRY_SIMPLIFY_TOLERANCE_DEGREES, preserve_topology=False)
+                    if geom.is_empty or geom.geom_type not in {"Polygon", "MultiPolygon"}:
+                        raise ValueError(f"Geometry simplification did not preserve a polygon in {path.name}")
                 properties = {str(key): _json_value(value) for key, value in dict(feature["properties"]).items()}
                 event_key = next((str(value).strip() for key, value in properties.items()
                                   if key.casefold() in {"eventcode", "event_id", "eventid"} and value), EVENT_KEY_FALLBACK)
@@ -130,6 +142,9 @@ def read_reference_features(source_dir: Path = DEFAULT_SOURCE_DIR, *, progress: 
                         "source_file": path.name,
                         "source_file_sha256": checksum,
                         "source_crs": source_crs.to_string(),
+                        "source_vertex_count": source_vertex_count,
+                        "operational_geometry_simplification_tolerance_degrees": GEOMETRY_SIMPLIFY_TOLERANCE_DEGREES,
+                        "operational_geometry_simplification_scale_m": GEOMETRY_SIMPLIFY_TOLERANCE_DEGREES * 111_320,
                         "event_code": event_key,
                         "evidence_kind": "reference_observation",
                         "confidence_status": next((str(value) for key, value in properties.items()
@@ -180,7 +195,8 @@ def inspect_reference(source_dir: Path = DEFAULT_SOURCE_DIR, *, progress: bool =
         "event_keys": sorted(event_keys),
         "event_dates": sorted(event_dates),
         "geometry_types": sorted(geometry_types),
-        "geometry_normalization": "PostGIS ST_MakeValid will normalize source polygons during ingest",
+        "geometry_normalization": "source retained locally with SHA-256; operational geometry is simplified at the configured tolerance and repaired with PostGIS ST_MakeValid",
+        "operational_geometry_simplification_tolerance_degrees": GEOMETRY_SIMPLIFY_TOLERANCE_DEGREES,
         "field_validation_statuses": sorted(validation_statuses),
     }
 
@@ -198,11 +214,14 @@ def _ensure_dataset(cur: Any, source_dir: Path) -> None:
 
 def ingest_reference(connection: Any, source_dir: Path = DEFAULT_SOURCE_DIR, batch_size: int = 1, summary: dict[str, Any] | None = None) -> dict[str, Any]:
     """Idempotently batch-upsert local event polygons and their run provenance."""
+    if batch_size < 1:
+        raise ValueError("batch_size must be at least 1")
     summary = summary or inspect_reference(source_dir, progress=True)
     print(f"UNOSAT: {summary['feature_count']} reference polygons across {len(summary['files'])} shapefiles; events={','.join(summary['event_keys'])}", flush=True)
-    records = list(read_reference_features(source_dir, progress=True))
     run_id = __import__("uuid").uuid4()
     inserted = 0
+    source_hashes: set[str] = set()
+    geometry_types: set[str] = set()
     with connection.cursor() as cur:
         cur.execute("SELECT pg_try_advisory_lock(hashtext(%s))", ("oseas_local_flood_reference_ingest",))
         if not cur.fetchone()[0]:
@@ -210,12 +229,14 @@ def ingest_reference(connection: Any, source_dir: Path = DEFAULT_SOURCE_DIR, bat
         _ensure_dataset(cur, source_dir)
         cur.execute(
             "INSERT INTO ingestion_runs (id,pipeline_name,status,metadata) VALUES (%s,'oseas_local_flood_reference_ingest','running',%s::jsonb)",
-            (run_id, json.dumps({"dataset_key": DATASET_KEY, "source_feature_count": len(records)})),
+            (run_id, json.dumps({"dataset_key": DATASET_KEY, "source_feature_count": summary["feature_count"], "batch_size": batch_size,
+                                 "operational_geometry_simplification_tolerance_degrees": GEOMETRY_SIMPLIFY_TOLERANCE_DEGREES})),
         )
     connection.commit()
     try:
-        for offset in range(0, len(records), batch_size):
-            batch = records[offset:offset + batch_size]
+        stream = iter(read_reference_features(source_dir, progress=True))
+        while batch := list(itertools.islice(stream, batch_size)):
+            print(f"UNOSAT: persisting feature batch {inserted + 1}-{inserted + len(batch)}/{summary['feature_count']}; running PostGIS geometry validation", flush=True)
             with connection.cursor() as cur:
                 cur.executemany(
                     """INSERT INTO flood_reference_features
@@ -230,17 +251,27 @@ def ingest_reference(connection: Any, source_dir: Path = DEFAULT_SOURCE_DIR, bat
                       json.dumps(row["source_properties"]), json.dumps(row["event_metadata"]),
                       row["geometry_wkb"], run_id) for row in batch],
                 )
+                source_hashes.update(row["event_metadata"]["source_file_sha256"] for row in batch)
+                geometry_types.update(row["geometry_type"] for row in batch)
                 cur.execute("UPDATE datasets SET last_ingested_at=NOW(),updated_at=NOW() WHERE dataset_key=%s", (DATASET_KEY,))
-                cur.execute("UPDATE ingestion_runs SET metadata=metadata||%s::jsonb WHERE id=%s", (json.dumps({"processed": offset + len(batch)}), run_id))
+                processed = inserted + len(batch)
+                cur.execute("UPDATE ingestion_runs SET metadata=metadata||%s::jsonb WHERE id=%s", (json.dumps({"processed": processed}), run_id))
             connection.commit()
             inserted += len(batch)
-            print(f"UNOSAT flood reference progress: {inserted}/{len(records)} polygons upserted", flush=True)
+            print(f"UNOSAT flood reference progress: {inserted}/{summary['feature_count']} polygons upserted", flush=True)
         with connection.cursor() as cur:
-            hashes = sorted({row["event_metadata"]["source_file_sha256"] for row in records})
-            cur.execute("INSERT INTO dataset_versions (dataset_key,source_reference,retrieved_at,feature_count,metadata,processing_run_id) VALUES (%s,%s,NOW(),%s,%s::jsonb,%s)",
-                        (DATASET_KEY, str(source_dir.resolve()), inserted, json.dumps({"files": [p.name for p in selected_files(source_dir)], "sha256": hashes, "event_keys": sorted({row['event_key'] for row in records})}), run_id))
+            version_hash = hashlib.sha256("|".join(sorted(source_hashes)).encode("ascii")).hexdigest()
+            version_metadata = {"files": [p.name for p in selected_files(source_dir)], "sha256": sorted(source_hashes),
+                                "source_bundle_sha256": version_hash, "event_keys": summary["event_keys"],
+                                "operational_geometry_simplification_tolerance_degrees": GEOMETRY_SIMPLIFY_TOLERANCE_DEGREES}
+            cur.execute("""INSERT INTO dataset_versions
+              (dataset_key,source_reference,source_version,checksum,retrieved_at,feature_count,metadata,processing_run_id)
+              SELECT %s,%s,%s,%s,NOW(),%s,%s::jsonb,%s
+              WHERE NOT EXISTS (SELECT 1 FROM dataset_versions WHERE dataset_key=%s AND checksum=%s)""",
+              (DATASET_KEY, str(source_dir.resolve()), "UNOSAT-2024-local-bundle", version_hash, inserted,
+               json.dumps(version_metadata), run_id, DATASET_KEY, version_hash))
             cur.execute("INSERT INTO data_quality_checks (run_id,dataset_key,check_name,status,details) VALUES (%s,%s,'local_reference_geometry_validation','warning',%s::jsonb)",
-                        (run_id, DATASET_KEY, json.dumps({"feature_count": inserted, "validation_status": "source states not yet field validated", "geometry_types": sorted({row['geometry_type'] for row in records}), "geometry_repair": "ST_MakeValid applied during persistence"})))
+                        (run_id, DATASET_KEY, json.dumps({"feature_count": inserted, "validation_status": "source states not yet field validated", "geometry_types": sorted(geometry_types), "geometry_repair": "ST_MakeValid applied during persistence"})))
             cur.execute("UPDATE ingestion_runs SET status='completed',finished_at=NOW(),metadata=metadata||%s::jsonb WHERE id=%s",
                         (json.dumps({"persisted": inserted, "source_directory": str(source_dir.resolve())}), run_id))
         connection.commit()

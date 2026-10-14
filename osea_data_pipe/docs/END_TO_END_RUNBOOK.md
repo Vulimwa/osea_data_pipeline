@@ -26,6 +26,27 @@ npm run oseas:flood:unosat:ingest
 
 The audit is read-only. The import upserts four source polygons by dataset/file/feature key into `flood_reference_features`; it is safe to rerun. The source contains two event codes (`FL20240421KEN`, `FL20240426KEN`) and labels its own field validation as not yet complete. PostGIS repairs invalid polygon topology for storage, while the original attributes remain preserved. This does not validate any model output.
 
+## 1a. WorldPop population exposure
+
+Acquire the 2024 WorldPop Global2 R2025A constrained Kenya count raster and calculate a local preview:
+
+```powershell
+npm run oseas:population:audit
+npm run oseas:population:download
+npm run oseas:population:exposure
+npm run oseas:population:admin-preview
+```
+
+Download and basic preview are file-only operations. The admin preview additionally reads county/ward geometries in a read-only PostGIS transaction. Both process raster windows in bounded memory, count overlapping polygons once per event, and write GeoJSON plus a provenance manifest under ignored `outputs/`. Display geometry is generalized for compact mapping; population sums use the original exact shapes. Preview commands do not write result rows to Supabase.
+
+After the reference import has exited successfully and `flood_reference_features` plus county/ward boundaries are present, persist the event and intersecting administrative summaries:
+
+```powershell
+npm run oseas:population:persist
+```
+
+This command checks for an active UNOSAT import and refuses to overlap it. It writes idempotent population rows, raster checksum/version metadata, quality and spatial coverage records. WorldPop population is a modeled estimate of residents inside the flood footprint, not measured impacts and not people supplied by energy assets. See [`IMPLEMENTATION_STATUS.md`](IMPLEMENTATION_STATUS.md) and [`FRONTEND_INTEGRATION_GUIDE.md`](FRONTEND_INTEGRATION_GUIDE.md).
+
 ## 2. Check Earth Engine source access
 
 The `.env` now includes the supplied river, lake and Nov 2023 flood Earth Engine asset IDs. After applying the additive schema, run only those sources with `npm run oseas:ingest -- --datasets kenya_rivers,kenya_lakes,kenya_flood_2023_reference`. Page upserts are keyed by the original source feature ID and do not duplicate existing rows.

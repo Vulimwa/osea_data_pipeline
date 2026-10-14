@@ -393,6 +393,9 @@ CREATE TABLE IF NOT EXISTS population_exposure_assessments (
   created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 CREATE INDEX IF NOT EXISTS idx_oseas_population_exposure_geom ON population_exposure_assessments USING GIST (geom);
+CREATE INDEX IF NOT EXISTS idx_oseas_population_unit_time ON population_exposure_assessments (reporting_unit_id, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_oseas_population_status_time ON population_exposure_assessments (assessment_status, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_oseas_population_event_key ON population_exposure_assessments ((evidence->>'eventKey'));
 
 CREATE TABLE IF NOT EXISTS grid_resilience_assessments (
   id UUID PRIMARY KEY DEFAULT gen_random_uuid(),

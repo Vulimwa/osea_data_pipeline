@@ -14,6 +14,7 @@ router.get('/layers', controller.getLayers);
 router.get('/layers/flood_candidate/geojson', controller.getFloodGeoJson);
 router.get('/layers/flood_reference/geojson', controller.getFloodReferenceGeoJson);
 router.get('/layers/hydrography/geojson', controller.getHydrographyGeoJson);
+router.get('/layers/population_exposure/geojson', controller.getPopulationExposureGeoJson);
 router.get('/layers/wind_resource', controller.getWindResourceManifest);
 router.get('/layers/wind_resource/:product/geotiff', controller.downloadWindResource);
 router.get('/layers/:layer/geojson', controller.getMapOutputGeoJson);
