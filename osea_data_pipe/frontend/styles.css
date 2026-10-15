@@ -1,16 +1,19 @@
 @import 'tailwindcss';
-@import 'maplibre-gl/dist/maplibre-gl.css';
+@import '@arcgis/core/assets/esri/themes/dark/main.css';
 
 :root {
-  --ink: #0c1a1f;
-  --mist: #e8f1f0;
-  --lake: #1a6b6b;
-  --flood: #c45c26;
-  --flood-soft: #e8a06a;
-  --safe: #3d6b4f;
-  --unknown: #6b7280;
-  --panel: rgba(12, 26, 31, 0.82);
-  --line: rgba(232, 241, 240, 0.14);
+  /* Charcoal + flood amber only — no teal “eco” cast */
+  --ink: #0b0c0e;
+  --ink-2: #14161a;
+  --paper: #16181d;
+  --mist: #ece8e2;
+  --mist-dim: rgba(236, 232, 226, 0.58);
+  --flood: #e06b2d;
+  --flood-soft: #f0a46a;
+  --ok: #c4b5a0;
+  --unknown: #7a7f88;
+  --line: rgba(236, 232, 226, 0.12);
+  --line-strong: rgba(236, 232, 226, 0.22);
   font-family: 'Outfit', system-ui, sans-serif;
   color: var(--mist);
   background: var(--ink);
@@ -28,34 +31,300 @@ body,
 }
 
 body {
-  background:
-    radial-gradient(1200px 600px at 10% -10%, rgba(26, 107, 107, 0.35), transparent 55%),
-    radial-gradient(900px 500px at 90% 0%, rgba(196, 92, 38, 0.18), transparent 50%),
-    var(--ink);
+  background: var(--ink);
 }
 
 h1,
 h2,
+h3,
 .brand {
   font-family: 'Fraunces', Georgia, serif;
-  font-optical-sizing: auto;
+  letter-spacing: -0.03em;
 }
 
-.maplibregl-popup-content {
-  background: var(--panel);
+calcite-shell {
+  --calcite-color-brand: #e06b2d;
+  --calcite-color-brand-hover: #f0a46a;
+  --calcite-color-background: #0b0c0e;
+  --calcite-color-foreground-1: #14161a;
+  height: 100%;
+}
+
+.app-outlet {
+  min-height: 0;
+  overflow: auto;
+}
+
+.page {
+  min-height: 0;
+}
+
+/* —— Briefing (home) —— */
+.briefing {
+  max-width: 720px;
+  margin: 0 auto;
+  padding: 2rem 1.25rem 3rem;
+}
+
+.briefing .brand {
+  font-size: 1.75rem;
+  margin: 0;
   color: var(--mist);
+}
+
+.briefing h1 {
+  margin: 0.55rem 0 0;
+  font-size: clamp(1.45rem, 3vw, 1.85rem);
+  font-weight: 500;
+  line-height: 1.2;
+  max-width: 22ch;
+}
+
+.briefing .lede {
+  margin: 0.65rem 0 0;
+  color: var(--mist-dim);
+  font-size: 0.95rem;
+  line-height: 1.5;
+  max-width: 46ch;
+}
+
+.stat-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+  margin-top: 1.25rem;
+}
+
+.stat {
   border: 1px solid var(--line);
-  border-radius: 2px;
-  padding: 0.65rem 0.8rem;
-  box-shadow: none;
+  padding: 0.45rem 0.7rem;
+  font-size: 0.72rem;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--mist-dim);
+}
+
+.stat strong {
+  display: block;
+  margin-top: 0.15rem;
   font-family: 'Outfit', system-ui, sans-serif;
+  font-size: 0.95rem;
+  letter-spacing: 0;
+  text-transform: none;
+  color: var(--mist);
+  font-weight: 500;
 }
 
-.maplibregl-popup-tip {
-  border-top-color: var(--panel) !important;
+.cta-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.6rem;
+  margin-top: 1.35rem;
 }
 
-.maplibregl-ctrl-attrib {
-  background: transparent !important;
-  color: rgba(232, 241, 240, 0.45) !important;
+.brief-list {
+  margin: 1.5rem 0 0;
+  padding: 0;
+  list-style: none;
+  border-top: 1px solid var(--line);
+}
+
+.brief-list li {
+  display: grid;
+  grid-template-columns: 7.5rem 1fr;
+  gap: 0.75rem;
+  padding: 0.7rem 0;
+  border-bottom: 1px solid var(--line);
+  font-size: 0.9rem;
+}
+
+.brief-list strong {
+  color: var(--mist);
+  font-weight: 500;
+}
+
+.brief-list span {
+  color: var(--mist-dim);
+  line-height: 1.4;
+}
+
+.honesty {
+  margin-top: 1.25rem;
+  padding: 0.75rem 0.85rem;
+  border-left: 2px solid var(--flood-soft);
+  color: var(--mist-dim);
+  font-size: 0.85rem;
+  line-height: 1.45;
+}
+
+/* —— Map —— */
+.map-page {
+  position: relative;
+  height: calc(100vh - 64px);
+  min-height: 420px;
+  background: var(--ink-2);
+}
+
+.map-fill {
+  position: absolute;
+  inset: 0;
+}
+
+.map-chrome {
+  position: absolute;
+  z-index: 12;
+  display: flex;
+  gap: 0.5rem;
+  pointer-events: none;
+}
+
+.map-chrome > * {
+  pointer-events: auto;
+}
+
+.map-chrome.top-left {
+  top: 0.75rem;
+  left: 0.75rem;
+}
+
+.map-chrome.top-right {
+  top: 0.75rem;
+  right: 0.75rem;
+}
+
+.map-chrome.sheet-anchor {
+  top: 3.4rem;
+  right: 0.75rem;
+  width: min(320px, calc(100vw - 1.5rem));
+}
+
+.map-chrome.bottom-left {
+  left: 0.75rem;
+  bottom: 1rem;
+  width: min(340px, calc(100% - 1.5rem));
+}
+
+.sheet-body {
+  display: grid;
+  gap: 0.65rem;
+  padding: 0.65rem 0.85rem 0.85rem;
+}
+
+.layer-row {
+  display: flex !important;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+  width: 100%;
+  margin: 0 0 0.5rem;
+}
+
+.layer-row small {
+  display: block;
+  color: var(--mist-dim);
+  font-size: 0.72rem;
+}
+
+.peek-body {
+  padding: 0.65rem 0.85rem 0.85rem;
+}
+
+.peek-body p {
+  margin: 0 0 0.7rem;
+  color: var(--mist-dim);
+  font-size: 0.85rem;
+}
+
+/* —— Evidence —— */
+.asset-page {
+  max-width: 880px;
+  margin: 0 auto;
+  padding: 1.5rem 1.25rem 2.5rem;
+}
+
+.asset-page .kicker {
+  color: var(--mist-dim);
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  font-size: 0.68rem;
+}
+
+.asset-page h1 {
+  margin: 0.35rem 0 0;
+  font-size: clamp(1.55rem, 3.5vw, 2rem);
+  line-height: 1.15;
+}
+
+.asset-page .meta {
+  margin-top: 0.35rem;
+  color: var(--mist-dim);
+  font-size: 0.9rem;
+}
+
+.metrics {
+  margin-top: 1.5rem;
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+  gap: 0;
+  border-top: 1px solid var(--line);
+}
+
+.metric {
+  border-bottom: 1px solid var(--line);
+  border-right: 1px solid var(--line);
+  padding: 0.85rem 0.9rem 1rem;
+}
+
+.metric label {
+  display: block;
+  color: var(--mist-dim);
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  font-size: 0.65rem;
+}
+
+.metric .value {
+  margin-top: 0.35rem;
+  font-size: 1.35rem;
+  font-family: 'Fraunces', Georgia, serif;
+  font-variant-numeric: tabular-nums;
+  line-height: 1.2;
+}
+
+.metric .note {
+  margin-top: 0.3rem;
+  color: var(--mist-dim);
+  font-size: 0.78rem;
+  line-height: 1.4;
+}
+
+.tone-safe {
+  color: var(--ok);
+}
+.tone-warn {
+  color: var(--flood-soft);
+}
+.tone-hot {
+  color: var(--flood);
+}
+.tone-unk {
+  color: var(--unknown);
+}
+
+.esri-view {
+  --esri-view-outline-color: transparent;
+}
+
+@media (max-width: 720px) {
+  .brief-list li {
+    grid-template-columns: 1fr;
+    gap: 0.2rem;
+  }
+
+  .map-chrome.sheet-anchor,
+  .map-chrome.bottom-left {
+    left: 0.5rem;
+    right: 0.5rem;
+    width: auto;
+  }
 }

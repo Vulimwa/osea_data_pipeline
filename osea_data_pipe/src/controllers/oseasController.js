@@ -334,6 +334,10 @@ const listAssets = asyncRoute(async (req, res) => {
   const values = [];
   const filters = [];
   if (req.query.type) { values.push(String(req.query.type)); filters.push(`a.asset_type=$${values.length}`); }
+  if (req.query.sourceDataset || req.query.sourceDatasetKey) {
+    values.push(String(req.query.sourceDataset || req.query.sourceDatasetKey));
+    filters.push(`a.source_dataset_key=$${values.length}`);
+  }
   if (req.query.wardId || req.query.countyId) {
     const level = req.query.wardId ? 'ward' : 'county';
     const unitId = req.query.wardId || req.query.countyId;

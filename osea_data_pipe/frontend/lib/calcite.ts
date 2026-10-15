@@ -1,0 +1,22 @@
+/** Register Calcite web components used by the OSEAS shell. */
+import '@esri/calcite-components/components/calcite-shell';
+import '@esri/calcite-components/components/calcite-navigation';
+import '@esri/calcite-components/components/calcite-navigation-logo';
+import '@esri/calcite-components/components/calcite-menu';
+import '@esri/calcite-components/components/calcite-menu-item';
+import '@esri/calcite-components/components/calcite-button';
+import '@esri/calcite-components/components/calcite-icon';
+import '@esri/calcite-components/components/calcite-panel';
+import '@esri/calcite-components/components/calcite-block';
+import '@esri/calcite-components/components/calcite-chip';
+import '@esri/calcite-components/components/calcite-list';
+import '@esri/calcite-components/components/calcite-list-item';
+import '@esri/calcite-components/components/calcite-input';
+import '@esri/calcite-components/components/calcite-label';
+import '@esri/calcite-components/components/calcite-switch';
+import '@esri/calcite-components/components/calcite-notice';
+import '@esri/calcite-components/components/calcite-loader';
+import '@esri/calcite-components/components/calcite-action';
+import '@esri/calcite-components/components/calcite-action-bar';
+import '@esri/calcite-components/components/calcite-sheet';
+import '@esri/calcite-components/main.css';
