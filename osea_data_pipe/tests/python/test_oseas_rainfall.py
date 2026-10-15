@@ -12,7 +12,7 @@ from ingest_chirps_rainfall import (  # noqa: E402
     event_window,
     stable_observation_id,
 )
-from run_oseas_pipeline import build_report  # noqa: E402
+from run_oseas_pipeline import build_report, validate_ntl_result  # noqa: E402
 
 
 class ChirpsRainfallTests(unittest.TestCase):
@@ -45,6 +45,31 @@ class ChirpsRainfallTests(unittest.TestCase):
         report = build_report([{"stage": "rainfall", "status": "blocked", "reason": "missing input"}], "start")
         self.assertEqual(report["status"], "partial")
         self.assertEqual(report["incomplete_stage_count"], 1)
+
+    def test_nightlights_stage_requires_complete_persisted_period(self):
+        metadata = {
+            "requested_zone_count": 10,
+            "persisted_observations": 30,
+            "recent_period": ["2023-08-01", "2026-07-01"],
+            "baseline_period": ["2012-01", "2015-12"],
+        }
+        valid, _ = validate_ntl_result("completed", metadata, 30,
+                                       ["2023-08-01", "2026-07-01"], ["2012-01", "2015-12"])
+        self.assertTrue(valid)
+        incomplete, reason = validate_ntl_result("completed", metadata, 29,
+                                                 ["2023-08-01", "2026-07-01"], ["2012-01", "2015-12"])
+        self.assertFalse(incomplete)
+        self.assertIn("incomplete", reason)
+
+    def test_nightlights_stage_rejects_wrong_period(self):
+        valid, reason = validate_ntl_result("completed", {
+            "requested_zone_count": 10,
+            "persisted_observations": 30,
+            "recent_period": ["2022-01-01", "2024-12-01"],
+            "baseline_period": ["2012-01", "2015-12"],
+        }, 30, ["2023-08-01", "2026-07-01"], ["2012-01", "2015-12"])
+        self.assertFalse(valid)
+        self.assertIn("period", reason)
 
 
 if __name__ == "__main__":

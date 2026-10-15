@@ -5,7 +5,7 @@ Base URL: `/api/v1/oseas`. Routes require a Supabase access token when `OSEAS_RE
 ## Initial map wiring
 
 1. Call `GET /readiness` and `GET /catalog` to show backend/schema state and source attribution.
-2. Call `GET /layers` to enumerate map layers currently registered in the API.
+2. Call `GET /layers` to enumerate map routes; stored derived layers report `queryable` without making a claim about whether rows exist. Request `?includeCounts=true` when exact `featureCount`, `hasData`, and `available`/`not_assessed` state are needed; map queries already return filtered totals.
 3. Load available source/reference features with `GET /layers/flood_reference/geojson?eventKey=...` or `GET /layers/hydrography/geojson?type=river|lake`.
 4. Load model candidates with `GET /layers/flood_candidate/geojson?bbox=west,south,east,north`.
 5. Load exposure summaries with `GET /layers/asset_exposure/geojson?sourceDataset=osm_kano_pilot&bbox=...`, pilot asset vulnerability with `GET /layers/asset_vulnerability/geojson?sourceDataset=osm_kano_pilot&bbox=...`, ward/county screening with `GET /layers/vulnerability_summaries/geojson?bbox=...`, and population estimates with the filters below.

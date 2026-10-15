@@ -4,7 +4,7 @@ const test = require('node:test');
 const assert = require('node:assert/strict');
 const request = require('supertest');
 const app = require('../../src/app');
-const { buildAssetListFilter, buildMapOutputFilter, mapAssetExposureRows, mapAssetVulnerabilityRows } = require('../../src/controllers/oseasController');
+const { buildAssetListFilter, buildMapOutputFilter, mapAssetExposureRows, mapAssetVulnerabilityRows, buildStoredLayerEntries } = require('../../src/controllers/oseasController');
 
 test('root metadata identifies OSEAS and exposes integration readiness route', async () => {
   const response = await request(app).get('/');
@@ -14,6 +14,26 @@ test('root metadata identifies OSEAS and exposes integration readiness route', a
   assert.equal(response.body.endpoints.oseas.asset_vulnerability, '/api/v1/oseas/assets/{id}/vulnerability');
   assert.equal(response.body.endpoints.oseas.vulnerability_layer, '/api/v1/oseas/layers/asset_vulnerability/geojson');
   assert.doesNotMatch(JSON.stringify(response.body), /Kilimani/i);
+});
+
+test('stored layer catalog reports persisted availability and counts per output', () => {
+  const layers = buildStoredLayerEntries({ rainfall: '7878', nightlights: 0, asset_exposure: 12 });
+  const rainfall = layers.find((layer) => layer.layer === 'rainfall');
+  const nightlights = layers.find((layer) => layer.layer === 'nightlights');
+  const exposure = layers.find((layer) => layer.layer === 'asset_exposure');
+  assert.equal(rainfall.featureCount, 7878);
+  assert.equal(rainfall.status, 'available');
+  assert.equal(nightlights.featureCount, 0);
+  assert.equal(nightlights.status, 'not_assessed');
+  assert.equal(exposure.endpoint, '/api/v1/oseas/layers/asset_exposure/geojson');
+});
+
+test('stored layer catalog stays fast by leaving data availability unclaimed without counts', () => {
+  const layers = buildStoredLayerEntries();
+  const rainfall = layers.find((layer) => layer.layer === 'rainfall');
+  assert.equal(rainfall.status, 'queryable');
+  assert.equal(Object.hasOwn(rainfall, 'hasData'), false);
+  assert.equal(Object.hasOwn(rainfall, 'featureCount'), false);
 });
 
 test('asset exposure route rejects invalid UUID without a database call', async () => {

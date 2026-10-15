@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+from collections import deque
 import json
 import os
 import re
@@ -13,6 +14,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(ROOT))
 LOCK = ROOT / "data" / ".oseas_pipeline.lock"
 from dotenv import load_dotenv
 load_dotenv(ROOT / ".env")
@@ -54,7 +56,14 @@ def run_stage(name: str, command: list[str], stages: list[dict[str, object]], *,
         return False
     print(f"\n[{name}] START {datetime.now(timezone.utc).isoformat()}", flush=True)
     started = time.monotonic()
-    result = subprocess.run(command, cwd=ROOT, check=False)
+    try:
+        result = subprocess.run(command, cwd=ROOT, check=False)
+    except OSError as error:
+        duration = round(time.monotonic() - started, 1)
+        print(f"[{name}] FAILED to start ({type(error).__name__})", flush=True)
+        stages.append({"stage": name, "status": "failed", "reason": f"Could not start stage ({type(error).__name__})",
+                       "duration_seconds": duration})
+        return False
     duration = round(time.monotonic() - started, 1)
     status = "completed" if result.returncode == 0 else "failed"
     print(f"[{name}] {status.upper()} exit={result.returncode} duration={duration}s", flush=True)
@@ -109,6 +118,138 @@ def active_python_processes(script_fragment: str) -> list[str]:
     return active
 
 
+def validate_ntl_result(status: str, metadata: dict[str, object], stored_rows: int,
+                        expected_recent: list[str] | None = None,
+                        expected_baseline: list[str] | None = None) -> tuple[bool, str]:
+    """Require the complete three-measure result set for every summarized zone."""
+    try:
+        zone_count = int(metadata.get("requested_zone_count", 0))
+        inserted_rows = int(metadata.get("persisted_observations", 0))
+        stored_rows = int(stored_rows)
+    except (TypeError, ValueError):
+        return False, "Night-lights run metadata has invalid row or zone counts"
+    expected_rows = zone_count * 3
+    if status != "completed":
+        return False, f"Night-lights processing ended with database status '{status}'"
+    if zone_count <= 0 or inserted_rows != expected_rows or stored_rows != expected_rows:
+        return False, (f"Night-lights result is incomplete: expected {expected_rows:,} rows, "
+                       f"run metadata reports {inserted_rows:,}, database contains {stored_rows:,}")
+    if expected_recent and metadata.get("recent_period") != expected_recent:
+        return False, "Night-lights result period does not match OSEAS_NTL_START_MONTH / OSEAS_NTL_END_MONTH"
+    if expected_baseline and metadata.get("baseline_period") != expected_baseline:
+        return False, "Night-lights baseline does not match OSEAS_NTL_BASELINE_START_MONTH / OSEAS_NTL_BASELINE_END_MONTH"
+    return True, f"verified {stored_rows:,} persisted rows across {zone_count:,} zones"
+
+
+def latest_ntl_progress() -> str:
+    path = ROOT / "outputs" / "logs" / "nightlights.stdout.log"
+    if not path.is_file():
+        return ""
+    tail: deque[str] = deque(maxlen=4)
+    try:
+        with path.open("r", encoding="utf-8", errors="replace") as stream:
+            tail.extend(line.rstrip() for line in stream)
+    except OSError:
+        return ""
+    return " | ".join(line for line in tail if line)
+
+
+def verify_ntl_result(completed_after: datetime | None = None) -> dict[str, object] | None:
+    """Read back the completed night-lights run and its rows; never trusts exit text alone."""
+    from oseas.config import database_url
+    import psycopg
+
+    url = database_url()
+    if not url:
+        raise RuntimeError("database connection is not configured")
+    with psycopg.connect(url, connect_timeout=15) as connection:
+        with connection.cursor() as cursor:
+            query = """
+              SELECT id::text,status,metadata,finished_at
+              FROM ingestion_runs
+              WHERE pipeline_name='oseas_viirs_black_marble' AND status='completed'
+            """
+            if completed_after is not None:
+                query += " AND finished_at >= %s"
+            query += " ORDER BY finished_at DESC LIMIT 1"
+            cursor.execute(query, (completed_after,) if completed_after is not None else ())
+            run = cursor.fetchone()
+            if not run:
+                return None
+            run_id, status, metadata, finished_at = run
+            if isinstance(metadata, str):
+                metadata = json.loads(metadata)
+            cursor.execute("""
+              SELECT COUNT(*) FROM climate_observations
+              WHERE processing_run_id=%s::uuid AND dataset_key='nasa_viirs_black_marble_monthly'
+            """, (run_id,))
+            stored_rows = int(cursor.fetchone()[0])
+    start_month = os.getenv("OSEAS_NTL_START_MONTH", "").strip()
+    end_month = os.getenv("OSEAS_NTL_END_MONTH", "").strip()
+    baseline_start = os.getenv("OSEAS_NTL_BASELINE_START_MONTH", "2012-01").strip()
+    baseline_end = os.getenv("OSEAS_NTL_BASELINE_END_MONTH", "2015-12").strip()
+    expected_recent = None
+    if start_month and end_month:
+        expected_recent = [f"{start_month}-01", f"{end_month}-01"]
+    expected_baseline = [baseline_start, baseline_end] if baseline_start and baseline_end else None
+    valid, detail = validate_ntl_result(str(status), metadata or {}, stored_rows,
+                                        expected_recent, expected_baseline)
+    if not valid:
+        raise RuntimeError(detail)
+    return {"run_id": run_id, "finished_at": finished_at.isoformat(), "detail": detail}
+
+
+def wait_for_active_ntl(active_pids: list[str], stages: list[dict[str, object]], timeout_minutes: int) -> bool:
+    """Wait for an already-running Black Marble job, then verify its persisted output."""
+    started = datetime.now(timezone.utc)
+    timeout_seconds = timeout_minutes * 60
+    last_report = 0.0
+    print("\n[NASA VIIRS Black Marble monthly radiance and context] WAITING: "
+          f"active process(es) {','.join(active_pids)}; will not launch a duplicate", flush=True)
+    while active_pids:
+        elapsed = time.monotonic() - last_report
+        if elapsed >= 60:
+            progress = latest_ntl_progress()
+            if progress:
+                print(f"[NASA VIIRS Black Marble] still running; {progress}", flush=True)
+            else:
+                elapsed_seconds = int((datetime.now(timezone.utc) - started).total_seconds())
+                print(f"[NASA VIIRS Black Marble] still running; elapsed={elapsed_seconds}s", flush=True)
+            last_report = time.monotonic()
+        if timeout_seconds and (datetime.now(timezone.utc) - started).total_seconds() >= timeout_seconds:
+            stages.append({"stage": "NASA VIIRS Black Marble monthly radiance and context", "status": "failed",
+                           "reason": f"Waited {timeout_minutes} minutes for the existing process; it remains active. "
+                                     "The process was left running and must not be duplicated."})
+            return False
+        try:
+            time.sleep(20)
+            active_pids = active_python_processes("ingest_viirs_black_marble.py")
+        except (OSError, RuntimeError, subprocess.SubprocessError) as error:
+            stages.append({"stage": "NASA VIIRS Black Marble monthly radiance and context", "status": "failed",
+                           "reason": f"Could not safely monitor active process ({type(error).__name__}); no duplicate was started"})
+            return False
+
+    print("[NASA VIIRS Black Marble] process exited; verifying committed database output", flush=True)
+    try:
+        result = verify_ntl_result(started)
+        if result is None:
+            # The process may have finished between process discovery and the
+            # first polling pass. Reuse a complete matching output if present.
+            result = verify_ntl_result()
+    except Exception as error:
+        stages.append({"stage": "NASA VIIRS Black Marble monthly radiance and context", "status": "failed",
+                       "reason": f"Existing process ended but output verification failed ({type(error).__name__})"})
+        return False
+    if result is None:
+        stages.append({"stage": "NASA VIIRS Black Marble monthly radiance and context", "status": "failed",
+                       "reason": "Existing process ended without a newly completed database run; check outputs/logs/nightlights.stderr.log"})
+        return False
+    stages.append({"stage": "NASA VIIRS Black Marble monthly radiance and context", "status": "completed",
+                   "external_process": True, **result})
+    print(f"[NASA VIIRS Black Marble] COMPLETED: {result['detail']}; run={result['run_id']}", flush=True)
+    return True
+
+
 def build_report(stages: list[dict[str, object]], started_at: str) -> dict[str, object]:
     incomplete = [stage for stage in stages if stage["status"] in {"failed", "blocked"}]
     return {
@@ -129,7 +270,9 @@ def build_report(stages: list[dict[str, object]], started_at: str) -> dict[str, 
 def write_report(report: dict[str, object]) -> None:
     report_path = ROOT / "outputs" / "last_pipeline_run.json"
     report_path.parent.mkdir(parents=True, exist_ok=True)
-    report_path.write_text(json.dumps(report, indent=2), encoding="utf-8")
+    temporary_path = report_path.with_suffix(".json.tmp")
+    temporary_path.write_text(json.dumps(report, indent=2), encoding="utf-8")
+    temporary_path.replace(report_path)
     print("\nOSEAS PIPELINE SUMMARY", flush=True)
     print(json.dumps(report, indent=2), flush=True)
 
@@ -138,7 +281,12 @@ def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--skip-earth-engine", action="store_true", help="Use already-ingested source features")
     parser.add_argument("--skip-worldpop-download", action="store_true", help="Require the selected WorldPop raster to exist locally")
+    parser.add_argument("--active-ntl-timeout-minutes", type=int,
+                        default=int(os.getenv("OSEAS_PIPELINE_ACTIVE_NTL_TIMEOUT_MINUTES", "1440")),
+                        help="Wait limit for an already-running night-lights job (default: 24 hours; 0 waits indefinitely)")
     args = parser.parse_args()
+    if args.active_ntl_timeout_minutes < 0:
+        parser.error("--active-ntl-timeout-minutes must be zero or greater")
     stages: list[dict[str, object]] = []
     pipeline_started_at = datetime.now(timezone.utc).isoformat()
     acquire_lock()
@@ -163,19 +311,62 @@ def main() -> int:
 
         ntl_start = os.getenv("OSEAS_NTL_START_MONTH", "").strip()
         ntl_end = os.getenv("OSEAS_NTL_END_MONTH", "").strip()
-        try:
-            active_ntl = active_python_processes("ingest_viirs_black_marble.py")
-        except RuntimeError as error:
-            active_ntl = [f"process check failed: {error}"]
-        if active_ntl:
-            reason = f"an existing Black Marble process is active ({','.join(active_ntl)}); wait for it instead of starting a duplicate"
-            print(f"\n[NASA VIIRS Black Marble monthly radiance and context] BLOCKED: {reason}", flush=True)
-            stages.append({"stage": "NASA VIIRS Black Marble monthly radiance and context", "status": "blocked", "reason": reason})
-        elif ntl_start and ntl_end:
-            run_stage("NASA VIIRS Black Marble monthly radiance and context", python_run("scripts/ingest_viirs_black_marble.py"), stages)
-        else:
+        if not ntl_start or not ntl_end:
             stages.append({"stage": "NASA VIIRS Black Marble monthly radiance and context", "status": "blocked",
               "reason": "Manifest-verified OSEAS_NTL_START_MONTH and OSEAS_NTL_END_MONTH are required; Earth Engine authentication is checked by the adapter (no NASA LAADS token is needed)"})
+        else:
+            try:
+                active_ntl = active_python_processes("ingest_viirs_black_marble.py")
+            except (OSError, RuntimeError, subprocess.SubprocessError) as error:
+                stages.append({"stage": "NASA VIIRS Black Marble monthly radiance and context", "status": "failed",
+                               "reason": f"Could not safely check for an existing process ({type(error).__name__}); no duplicate was started"})
+                active_ntl = []
+                ntl_process_check_failed = True
+            else:
+                ntl_process_check_failed = False
+
+            if not ntl_process_check_failed and active_ntl:
+                wait_for_active_ntl(active_ntl, stages, args.active_ntl_timeout_minutes)
+            elif not ntl_process_check_failed:
+                ntl_output_check_failed = False
+                try:
+                    existing_ntl = verify_ntl_result()
+                except RuntimeError as error:
+                    if str(error).startswith(("Night-lights result is incomplete", "Night-lights result period", "Night-lights baseline")):
+                        print(f"\n[NASA VIIRS Black Marble] existing result does not match configured output: {error}", flush=True)
+                        existing_ntl = None
+                    else:
+                        existing_ntl = None
+                        ntl_output_check_failed = True
+                        stages.append({"stage": "NASA VIIRS Black Marble monthly radiance and context", "status": "failed",
+                                       "reason": "Could not safely verify existing night-lights output; no new acquisition was started"})
+                except Exception as error:
+                    existing_ntl = None
+                    ntl_output_check_failed = True
+                    stages.append({"stage": "NASA VIIRS Black Marble monthly radiance and context", "status": "failed",
+                                   "reason": f"Could not safely verify existing night-lights output ({type(error).__name__}); no new acquisition was started"})
+                if not ntl_output_check_failed and existing_ntl:
+                    stages.append({"stage": "NASA VIIRS Black Marble monthly radiance and context", "status": "completed",
+                                   "reused_persisted_output": True, **existing_ntl})
+                    print(f"\n[NASA VIIRS Black Marble] REUSED: {existing_ntl['detail']}; run={existing_ntl['run_id']}", flush=True)
+                elif not ntl_output_check_failed:
+                    ntl_started = datetime.now(timezone.utc)
+                    if run_stage("NASA VIIRS Black Marble monthly radiance and context",
+                                 python_run("scripts/ingest_viirs_black_marble.py"), stages):
+                        try:
+                            ntl_result = verify_ntl_result(ntl_started)
+                        except Exception as error:
+                            ntl_result = None
+                            ntl_failure = f"database output verification failed ({type(error).__name__})"
+                        else:
+                            ntl_failure = "the run exited successfully but no complete persisted output was found"
+                        if ntl_result is None:
+                            stages[-1]["status"] = "failed"
+                            stages[-1]["reason"] = ntl_failure
+                            print(f"[NASA VIIRS Black Marble] FAILED: {ntl_failure}", flush=True)
+                        else:
+                            stages[-1].update(ntl_result)
+                            print(f"[NASA VIIRS Black Marble] verified: {ntl_result['detail']}; run={ntl_result['run_id']}", flush=True)
 
         unosat_ok = run_stage("UNOSAT flood reference ingest", python_run("scripts/ingest_unosat_flood_reference.py"), stages)
 

@@ -39,6 +39,25 @@ const mapLayerSql = {
   grid_resilience: `SELECT id::text AS id,geom,jsonb_build_object('energyAssetId',energy_asset_id,'reportingUnitId',reporting_unit_id,'assessmentStatus',assessment_status,'score',score,'criteria',criteria,'method',method,'evidence',evidence,'confidence',confidence,'processingRunId',processing_run_id) AS properties FROM grid_resilience_assessments`,
   coverage: `SELECT id::text || ':observation' AS id,observation_footprint AS geom,jsonb_build_object('coverageId',id,'footprintType','observation','datasetKey',dataset_key,'processingRunId',processing_run_id,'reportingUnitId',reporting_unit_id,'reportingUnitLevel',reporting_unit_level,'hazardType',hazard_type,'evidenceKind',evidence_kind,'observationStart',observation_start,'observationEnd',observation_end,'coverageStatus',coverage_status,'areaCoverageFraction',area_coverage_fraction,'validDataFraction',valid_data_fraction,'qualityMask',quality_mask,'validationStatus',validation_status,'limitations',limitations,'provenance',provenance) AS properties FROM spatial_coverage_assessments UNION ALL SELECT id::text || ':valid' AS id,valid_data_footprint AS geom,jsonb_build_object('coverageId',id,'footprintType','valid_data','datasetKey',dataset_key,'processingRunId',processing_run_id,'reportingUnitId',reporting_unit_id,'reportingUnitLevel',reporting_unit_level,'hazardType',hazard_type,'evidenceKind',evidence_kind,'observationStart',observation_start,'observationEnd',observation_end,'coverageStatus',coverage_status,'areaCoverageFraction',area_coverage_fraction,'validDataFraction',valid_data_fraction,'qualityMask',quality_mask,'validationStatus',validation_status,'limitations',limitations,'provenance',provenance) AS properties FROM spatial_coverage_assessments`,
 };
+const mapLayerCountSql = {
+  climate_observations: `SELECT count(*)::int FROM climate_observations WHERE geom IS NOT NULL`,
+  rainfall: `SELECT count(*)::int FROM climate_observations o JOIN administrative_units u ON u.id::text=o.source_properties->>'reportingUnitId' WHERE o.dataset_key='chirps_daily' AND o.variable IN ('CHIRPS_30D_TOTAL_MM','CHIRPS_30D_ANOMALY_MM','CHIRPS_30D_ANOMALY_PERCENT') AND u.geom IS NOT NULL`,
+  nightlights: `SELECT count(DISTINCT o.source_properties->>'zoneKey')::int FROM climate_observations o WHERE o.dataset_key='nasa_viirs_black_marble_monthly' AND o.geom IS NOT NULL`,
+  climate_projections: `SELECT count(*)::int FROM climate_projections WHERE geom IS NOT NULL`,
+  terrain: `SELECT count(*)::int FROM terrain_metrics WHERE geom IS NOT NULL`,
+  land_cover: `SELECT count(*)::int FROM land_cover_metrics WHERE geom IS NOT NULL`,
+  fire: `SELECT count(*)::int FROM hazard_events h WHERE h.hazard_type IN ('fire','wildfire') AND h.geom IS NOT NULL`,
+  asset_exposure: `SELECT count(*)::int FROM asset_hazard_exposure e JOIN energy_assets a ON a.id=e.energy_asset_id WHERE a.geom IS NOT NULL`,
+  asset_vulnerability: `SELECT count(*)::int FROM asset_vulnerability_assessments v JOIN energy_assets a ON a.id=v.energy_asset_id WHERE a.geom IS NOT NULL`,
+  asset_criticality: `SELECT count(*)::int FROM asset_criticality_assessments c JOIN energy_assets a ON a.id=c.energy_asset_id WHERE a.geom IS NOT NULL`,
+  service_dependencies: `SELECT count(*)::int FROM service_dependencies d JOIN energy_assets a ON a.id=d.energy_asset_id JOIN critical_services s ON s.id=d.critical_service_id WHERE a.geom IS NOT NULL`,
+  administrative_summaries: `SELECT count(*)::int FROM administrative_hazard_summaries s JOIN administrative_units u ON u.id=s.administrative_unit_id WHERE u.geom IS NOT NULL`,
+  vulnerability_summaries: `SELECT ((SELECT count(*) FROM ward_vulnerability_summary s JOIN administrative_units u ON u.id=s.ward_id WHERE u.geom IS NOT NULL) + (SELECT count(*) FROM county_vulnerability_summary s JOIN administrative_units u ON u.id=s.county_id WHERE u.geom IS NOT NULL))::int`,
+  interventions: `SELECT count(*)::int FROM intervention_scenarios i LEFT JOIN energy_assets a ON a.id=i.energy_asset_id WHERE coalesce(i.area,a.geom) IS NOT NULL`,
+  population_exposure: `SELECT count(*)::int FROM population_exposure_assessments WHERE geom IS NOT NULL`,
+  grid_resilience: `SELECT count(*)::int FROM grid_resilience_assessments WHERE geom IS NOT NULL`,
+  coverage: `SELECT (SELECT count(*) FROM spatial_coverage_assessments WHERE observation_footprint IS NOT NULL) + (SELECT count(*) FROM spatial_coverage_assessments WHERE valid_data_footprint IS NOT NULL)`,
+};
 
 const asyncRoute = (fn) => (req, res, next) => Promise.resolve(fn(req, res, next)).catch(next);
 const uuidPattern = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
@@ -143,6 +162,25 @@ function mapAssetVulnerabilityRows(rows) {
       scoreStatus: hasScore
         ? (provenance.pilot ? 'pilot_screening' : 'source_assessment')
         : (row.status === 'not_assessed' ? 'not_assessed' : 'withheld'),
+    };
+  });
+}
+
+function buildStoredLayerEntries(featureCounts = {}, availability = {}) {
+  const sourceFilterLayers = ['asset_exposure', 'asset_vulnerability', 'asset_criticality', 'service_dependencies'];
+  return Object.keys(mapLayerSql).map((layer) => {
+    const featureCount = Object.hasOwn(featureCounts, layer) ? Number(featureCounts[layer] || 0) : undefined;
+    const hasData = Object.hasOwn(availability, layer) ? Boolean(availability[layer]) : (featureCount === undefined ? undefined : featureCount > 0);
+    return {
+      layer,
+      evidenceKind: 'stored_derived_output',
+      geometry: 'GeoJSON geometry',
+      crs: 'EPSG:4326',
+      endpoint: `/api/v1/oseas/layers/${layer}/geojson`,
+      ...(sourceFilterLayers.includes(layer) ? { filters: ['sourceDataset', 'bbox', 'limit', 'offset'] } : { filters: ['bbox', 'limit', 'offset'] }),
+      ...(hasData === undefined ? {} : { hasData }),
+      ...(featureCount === undefined ? {} : { featureCount }),
+      status: hasData === undefined ? 'queryable' : (hasData ? 'available' : 'not_assessed'),
     };
   });
 }
@@ -297,22 +335,34 @@ const getRun = asyncRoute(async (req, res) => {
   res.json({ data: { ...item, metadata: parseJson(item.metadata, {}), parameters: parseJson(item.parameters, {}), metrics: parseJson(item.metrics, {}), qualityChecks: checks.rows.map((row) => ({ ...row, details: parseJson(row.details, {}) })) } });
 });
 
-const getLayers = asyncRoute(async (_req, res) => {
+const getLayers = asyncRoute(async (req, res) => {
   const result = await db.query(`
     SELECT hazard_type,evidence_kind,count(*)::int AS feature_count,max(processing_run_id::text) AS latest_processing_run_id
     FROM hazard_events GROUP BY hazard_type,evidence_kind ORDER BY hazard_type,evidence_kind
   `);
-  const sourceFilterLayers = ['asset_exposure', 'asset_vulnerability', 'asset_criticality', 'service_dependencies'];
-  const storedOutputs = Object.keys(mapLayerSql).map((layer) => ({ layer, evidenceKind: 'stored_derived_output', geometry: 'GeoJSON geometry', crs: 'EPSG:4326', endpoint: `/api/v1/oseas/layers/${layer}/geojson`, ...(sourceFilterLayers.includes(layer) ? { filters: ['sourceDataset', 'bbox', 'limit', 'offset'] } : { filters: ['bbox', 'limit', 'offset'] }), status: 'queryable_not_assessed_until_rows_exist' }));
+  const includeCounts = String(req.query.includeCounts || '').toLowerCase() === 'true';
+  let featureCounts = {};
+  if (includeCounts) {
+    const countQuery = Object.entries(mapLayerCountSql)
+      .map(([layer, sql]) => `SELECT '${layer}'::text AS layer, (${sql})::int AS feature_count`)
+      .join(' UNION ALL ');
+    const countResult = await db.query(countQuery);
+    featureCounts = Object.fromEntries(countResult.rows.map((row) => [row.layer, Number(row.feature_count || 0)]));
+  }
+  const storedOutputs = buildStoredLayerEntries(featureCounts);
   const referenceLayers = [
     { layer: 'flood_reference', evidenceKind: 'reference_observation', endpoint: '/api/v1/oseas/layers/flood_reference/geojson' },
     { layer: 'hydrography_rivers_lakes', evidenceKind: 'reference_hydrography', endpoint: '/api/v1/oseas/layers/hydrography/geojson' },
     { layer: 'wind_resource', evidenceKind: 'renewable_resource', endpoint: '/api/v1/oseas/layers/wind_resource' },
   ];
-  res.json({ data: [
-    ...result.rows.map((row) => ({ ...row, geometry: 'GeoJSON geometry', crs: 'EPSG:4326', endpoint: row.hazard_type === 'flood' ? '/api/v1/oseas/layers/flood_candidate/geojson' : (['fire', 'wildfire'].includes(row.hazard_type) ? '/api/v1/oseas/layers/fire/geojson' : null) })),
-    ...referenceLayers.map((row) => ({ ...row, geometry: 'GeoJSON geometry', crs: 'EPSG:4326' })), ...storedOutputs,
-  ] });
+  const hazardLayers = result.rows.map((row) => ({ ...row, geometry: 'GeoJSON geometry', crs: 'EPSG:4326', endpoint: row.hazard_type === 'flood' ? '/api/v1/oseas/layers/flood_candidate/geojson' : (['fire', 'wildfire'].includes(row.hazard_type) ? '/api/v1/oseas/layers/fire/geojson' : null) }));
+  const hasFireHazardLayer = hazardLayers.some((row) => ['fire', 'wildfire'].includes(row.hazard_type));
+  const data = [
+    ...hazardLayers,
+    ...referenceLayers.map((row) => ({ ...row, geometry: 'GeoJSON geometry', crs: 'EPSG:4326' })),
+    ...storedOutputs.filter((row) => row.layer !== 'fire' || !hasFireHazardLayer),
+  ];
+  res.json({ data, count: data.length });
 });
 
 const getFloodGeoJson = asyncRoute(async (req, res) => {
@@ -513,4 +563,4 @@ const getPriorities = asyncRoute(async (req, res) => {
   res.json({ data: result.rows.map((row) => ({ ...row, evidence: parseJson(row.evidence, {}), assumptions: parseJson(row.assumptions, {}) })), pagination: { limit, offset }, status: result.rows.length ? 'available' : 'not_assessed' });
 });
 
-module.exports = { getReadiness, getCatalog, getRuns, getRun, getLayers, getFloodGeoJson, getHydrographyGeoJson, getFloodReferenceGeoJson, getMapOutputGeoJson, getPopulationExposureGeoJson, getWindResourceManifest, downloadWindResource, listAssets, getAssetExposure, getAssetVulnerability, getAssetCriticality, getAssetServiceDependencies, getAdminSummary, getPriorities, buildAssetListFilter, buildMapOutputFilter, mapAssetExposureRows, mapAssetVulnerabilityRows };
+module.exports = { getReadiness, getCatalog, getRuns, getRun, getLayers, getFloodGeoJson, getHydrographyGeoJson, getFloodReferenceGeoJson, getMapOutputGeoJson, getPopulationExposureGeoJson, getWindResourceManifest, downloadWindResource, listAssets, getAssetExposure, getAssetVulnerability, getAssetCriticality, getAssetServiceDependencies, getAdminSummary, getPriorities, buildAssetListFilter, buildMapOutputFilter, mapAssetExposureRows, mapAssetVulnerabilityRows, buildStoredLayerEntries };

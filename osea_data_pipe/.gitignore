@@ -37,6 +37,7 @@ google-credentials*.json
 *.log
 *.tmp
 *.temp
+data/.oseas_pipeline.lock
 *.swp
 *.swo
 *.pid
