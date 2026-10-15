@@ -136,7 +136,7 @@ def _persist_output(cur: Any, run_id: str, fingerprint: str, parameters: dict[st
            SELECT md5(a.id::text || ':' || h.id::text || ':flood')::uuid,a.id,h.id,'flood',%s::date,%s::date,'exposed',
              CASE WHEN ST_Dimension(a.geom)=2 THEN ST_Area(ST_Intersection(a.geom,h.geom)::geography) END,
              CASE WHEN ST_Dimension(a.geom)=1 THEN ST_Length(ST_CollectionExtract(ST_Intersection(a.geom,h.geom),2)::geography) END,
-             'modeled',NULL,jsonb_build_object('method_version',%s,'event_fingerprint',%s,'source_collection','COPERNICUS/S1_GRD','quality',%s::jsonb),%s
+             'modeled',NULL,jsonb_build_object('method_version',%s::text,'event_fingerprint',%s::text,'source_collection','COPERNICUS/S1_GRD','quality',%s::jsonb),%s
            FROM energy_assets a JOIN hazard_events h ON h.processing_run_id=%s AND h.hazard_type='flood' AND ST_Intersects(a.geom,h.geom)
            ON CONFLICT(id) DO UPDATE SET exposure_status=EXCLUDED.exposure_status,
              intersection_area_m2=EXCLUDED.intersection_area_m2,intersection_length_m=EXCLUDED.intersection_length_m,
@@ -169,7 +169,7 @@ def _persist_output(cur: Any, run_id: str, fingerprint: str, parameters: dict[st
            SELECT md5(unit_id::text || ':' || %s)::uuid,unit_id,'flood',%s,%s::date,%s::date,
              CASE WHEN %s > 0 AND ST_Covers(ST_MakeEnvelope(%s,%s,%s,%s,4326),unit_geom)
                THEN 'screened' ELSE 'insufficient_data' END,
-             asset_count,exposed_count,NULL,jsonb_build_object('method_version',%s,'evidence_kind','modeled','summary_definition','assets intersecting unvalidated candidate polygons; fraction omitted because S1 spatial coverage can be incomplete'),%s
+             asset_count,exposed_count,NULL,jsonb_build_object('method_version',%s::text,'evidence_kind','modeled','summary_definition','assets intersecting unvalidated candidate polygons; fraction omitted because S1 spatial coverage can be incomplete'),%s
            FROM counts
            ON CONFLICT(administrative_unit_id,hazard_type,event_fingerprint) DO UPDATE SET
              period_start=EXCLUDED.period_start,period_end=EXCLUDED.period_end,assessment_status=EXCLUDED.assessment_status,

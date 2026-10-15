@@ -6,7 +6,7 @@ Base path: `/api/v1/oseas`. Routes are read-only; processing is started through 
 
 | Method and path | Query/body | Response |
 |---|---|---|
-| `GET /readiness` | None | DB/PostGIS connectivity, source-import run, inventory/output table presence, latest flood run, separate heat/fire/nightlights/rainfall/population availability, and Prithvi state. Nightlight counts use the Black Marble dataset key; rainfall counts use persisted CHIRPS event summaries. `apiReadyForIntegration` is false until the complete OSEAS schema is installed; it does not mean hazards are scientifically validated. |
+| `GET /readiness` | None | DB/PostGIS connectivity, source-import run, inventory/output table presence, latest usable flood run plus latest attempt, separate heat/fire/nightlights/rainfall/population availability, and Prithvi state. Nightlight counts use the Black Marble dataset key; rainfall counts use persisted CHIRPS event summaries. `apiReadyForIntegration` is false until the complete OSEAS schema is installed; it does not mean hazards are scientifically validated. |
 | `GET /catalog` | None | Machine registry data, access method, coverage, temporal range, units, attribution, evidence kind, retrieval state and last successful persisted retrieval. |
 | `GET /runs?limit=100&offset=0` | limit 1–500; offset >=0 | OSEAS ingestion/processing runs with model diagnostics when linked. |
 | `GET /runs/{uuid}` | UUID path | One processing run plus quality checks. `404 NOT_FOUND` if absent. |

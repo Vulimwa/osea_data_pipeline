@@ -27,6 +27,7 @@ SCALE_METERS = 5566
 ADMIN_SIMPLIFICATION_DEGREES = 0.0005
 BATCH_SIZE = 150
 LOCK_NAME = "oseas_chirps_rainfall_context"
+RUN_LEASE_MINUTES = 30
 METHOD = "chirps_30_day_event_rainfall_anomaly_by_administrative_unit_v1"
 
 
@@ -92,7 +93,8 @@ def _read_inputs(url: str) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
     return events, units
 
 
-def _earth_engine_summaries(ee: Any, event: dict[str, Any], units: list[dict[str, Any]]) -> tuple[list[dict[str, Any]], int]:
+def _earth_engine_summaries(ee: Any, event: dict[str, Any], units: list[dict[str, Any]],
+                            progress_callback: Any | None = None) -> tuple[list[dict[str, Any]], int]:
     event_date = event["event_date"]
     period_start, period_end = event_window(event_date)
     collection = ee.ImageCollection(COLLECTION_ID).select("precipitation")
@@ -152,6 +154,8 @@ def _earth_engine_summaries(ee: Any, event: dict[str, Any], units: list[dict[str
                 "anomaly_percent": _finite_or_none(values.get("anomaly_percent")),
             })
         print(f"CHIRPS {event['event_key']}: administrative summaries {min(offset + len(batch), len(units))}/{len(units)}", flush=True)
+        if progress_callback:
+            progress_callback(min(offset + len(batch), len(units)), len(units))
     return output, event_image_count
 
 
@@ -190,6 +194,64 @@ def _record_properties(row: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+def _start_run(url: str, events: list[dict[str, Any]]) -> uuid.UUID:
+    """Claim one durable run lease, serialized through a row lock (pooler safe)."""
+    import psycopg
+
+    run_id = uuid.uuid4()
+    now = datetime.now(timezone.utc)
+    metadata = {"method": METHOD, "collection": COLLECTION_ID,
+                "eventKeys": [event["event_key"] for event in events],
+                "windowDays": WINDOW_DAYS, "baselineYears": [BASELINE_START_YEAR, BASELINE_END_YEAR],
+                "heartbeatAt": now.isoformat(), "progress": {"stage": "starting"}}
+    with psycopg.connect(url, prepare_threshold=None, connect_timeout=20,
+                         options="-c statement_timeout=30000", application_name="oseas-chirps-run-start") as connection:
+        with connection.cursor() as cur:
+            cur.execute("""
+                INSERT INTO datasets(dataset_key,name,source_type,source_reference,category,licence,attribution,is_optional)
+                VALUES (%s,'CHIRPS daily precipitation','earth_engine_image_collection',%s,'climate',
+                  'CHIRPS data terms','UCSB Climate Hazards Center; Funk et al. (2015)',TRUE)
+                ON CONFLICT(dataset_key) DO NOTHING
+            """, (DATASET_KEY, COLLECTION_ID))
+            cur.execute("SELECT dataset_key FROM datasets WHERE dataset_key=%s FOR UPDATE", (DATASET_KEY,))
+            cur.execute("""
+                SELECT id,COALESCE(NULLIF(metadata->>'heartbeatAt','')::timestamptz,started_at)
+                FROM ingestion_runs WHERE pipeline_name=%s AND status='running' FOR UPDATE
+            """, (LOCK_NAME,))
+            active_runs = cur.fetchall()
+            stale_ids = []
+            for active_id, heartbeat_at in active_runs:
+                if heartbeat_at and heartbeat_at > now - timedelta(minutes=RUN_LEASE_MINUTES):
+                    raise RuntimeError(f"CHIRPS run {active_id} has a live database lease; refusing a duplicate run")
+                stale_ids.append(active_id)
+            if stale_ids:
+                cur.execute("""
+                    UPDATE ingestion_runs SET status='partial',finished_at=NOW(),
+                      error_message='Recovered abandoned CHIRPS run after its progress lease expired'
+                    WHERE id=ANY(%s)
+                """, (stale_ids,))
+            cur.execute("""
+                INSERT INTO ingestion_runs(id,pipeline_name,status,metadata)
+                VALUES (%s,%s,'running',%s::jsonb)
+            """, (run_id, LOCK_NAME, json.dumps(metadata)))
+    return run_id
+
+
+def _heartbeat(url: str, run_id: uuid.UUID, progress: dict[str, Any]) -> None:
+    """Refresh the run lease after each Earth Engine batch."""
+    import psycopg
+
+    with psycopg.connect(url, prepare_threshold=None, connect_timeout=20,
+                         options="-c statement_timeout=30000", application_name="oseas-chirps-heartbeat") as connection:
+        with connection.cursor() as cur:
+            cur.execute("""
+                UPDATE ingestion_runs SET metadata=metadata||jsonb_build_object('heartbeatAt',NOW(),'progress',%s::jsonb)
+                WHERE id=%s AND status='running' RETURNING id
+            """, (json.dumps(progress), run_id))
+            if not cur.fetchone():
+                raise RuntimeError(f"CHIRPS run lease {run_id} is no longer active")
+
+
 def _persist(url: str, events: list[dict[str, Any]], results: list[dict[str, Any]], run_id: uuid.UUID) -> dict[str, Any]:
     import psycopg
 
@@ -217,9 +279,6 @@ def _persist(url: str, events: list[dict[str, Any]], results: list[dict[str, Any
     with psycopg.connect(url, prepare_threshold=None, connect_timeout=20,
                          options="-c statement_timeout=600000", application_name="oseas-chirps-persist") as connection:
         with connection.cursor() as cur:
-            cur.execute("SELECT pg_try_advisory_xact_lock(hashtext(%s))", (LOCK_NAME,))
-            if not cur.fetchone()[0]:
-                raise RuntimeError("Another CHIRPS rainfall persistence run is active")
             cur.execute("""
                 INSERT INTO datasets(dataset_key,name,source_type,source_reference,category,licence,attribution,is_optional)
                 VALUES (%s,'CHIRPS daily precipitation','earth_engine_image_collection',%s,'climate',
@@ -289,41 +348,18 @@ def main() -> int:
     print(f"CHIRPS: dated reference events={len(events)}; county/ward units={len(units)}; "
           f"baseline={BASELINE_START_YEAR}-{BASELINE_END_YEAR}", flush=True)
 
-    import psycopg
-    lock_connection = psycopg.connect(url, prepare_threshold=None, connect_timeout=20,
-                                      application_name="oseas-chirps-lock")
-    run_id = uuid.uuid4()
+    run_id = _start_run(url, events)
     try:
-        with lock_connection.cursor() as cur:
-            cur.execute("SELECT pg_try_advisory_lock(hashtext(%s))", (LOCK_NAME,))
-            if not cur.fetchone()[0]:
-                raise RuntimeError("Another CHIRPS rainfall process is active; refusing a duplicate run")
-        lock_connection.commit()
-        with psycopg.connect(url, prepare_threshold=None, connect_timeout=20,
-                             application_name="oseas-chirps-run-start") as connection:
-            with connection.cursor() as cur:
-                cur.execute("""
-                    UPDATE ingestion_runs SET status='partial',finished_at=NOW(),
-                      error_message='Recovered abandoned CHIRPS run after acquiring the single-writer lock'
-                    WHERE pipeline_name='oseas_chirps_rainfall_context' AND status='running'
-                """)
-                cur.execute("""
-                    INSERT INTO ingestion_runs(id,pipeline_name,status,metadata)
-                    VALUES (%s,'oseas_chirps_rainfall_context','running',%s::jsonb)
-                """, (run_id, json.dumps({"method": METHOD, "collection": COLLECTION_ID,
-                    "eventKeys": [event["event_key"] for event in events],
-                    "windowDays": WINDOW_DAYS, "baselineYears": [BASELINE_START_YEAR, BASELINE_END_YEAR]})))
-
         import ee
         results: list[dict[str, Any]] = []
         for event in events:
-            event_rows, _ = _earth_engine_summaries(ee, event, units)
+            event_rows, _ = _earth_engine_summaries(ee, event, units,
+                progress_callback=lambda completed, total, event_key=event["event_key"]:
+                    _heartbeat(url, run_id, {"stage": "earth_engine_summaries", "eventKey": event_key,
+                                             "administrativeUnitsCompleted": completed, "administrativeUnitsTotal": total}))
             valid = [row for row in event_rows if row["event_total_mm"] is not None and row["baseline_mean_mm"] is not None]
             results.extend(valid)
             print(f"CHIRPS {event['event_key']}: covered reporting units={len(valid)}/{len(units)}", flush=True)
-            with lock_connection.cursor() as cur:
-                cur.execute("SELECT 1")
-            lock_connection.commit()
         if not results:
             raise RuntimeError("CHIRPS returned no event/reference administrative-unit summaries")
         result = _persist(url, events, results, run_id)
@@ -346,8 +382,6 @@ def main() -> int:
         except Exception:
             pass
         raise
-    finally:
-        lock_connection.close()
 
 
 if __name__ == "__main__":

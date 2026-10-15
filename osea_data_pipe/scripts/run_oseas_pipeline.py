@@ -221,6 +221,19 @@ def main() -> int:
             stages.append({"stage": "Sentinel-1 flood screening", "status": "blocked",
               "reason": "set OSEAS_FLOOD_BBOX, OSEAS_FLOOD_EVENT_START/END and OSEAS_FLOOD_BASELINE_START/END; no national dates or AOI are inferred"})
 
+        prithvi_bbox = os.getenv("OSEAS_PRITHVI_BBOX", "").strip() or bbox
+        prithvi_start = os.getenv("OSEAS_PRITHVI_EVENT_START", "").strip() or event_start
+        prithvi_end = os.getenv("OSEAS_PRITHVI_EVENT_END", "").strip() or event_end
+        prithvi_max_cloud = os.getenv("OSEAS_PRITHVI_MAX_CLOUD_PERCENT", "30").strip() or "30"
+        if prithvi_bbox and prithvi_start and prithvi_end:
+            command = python_run("scripts/run_prithvi_flood.py", "--bbox", *prithvi_bbox.split(","),
+                                 "--event-start", prithvi_start, "--event-end", prithvi_end,
+                                 "--max-cloud-percent", prithvi_max_cloud)
+            run_stage("bounded Sentinel-2 Prithvi flood inference", command, stages)
+        else:
+            stages.append({"stage": "bounded Sentinel-2 Prithvi flood inference", "status": "blocked",
+              "reason": "set OSEAS_PRITHVI_BBOX and OSEAS_PRITHVI_EVENT_START/END (or reuse the Sentinel-1 bbox/event dates); the model limits each inference to 5 km²"})
+
         report = build_report(stages, pipeline_started_at)
         write_report(report)
         return 0 if report["status"] == "completed_with_limitations" else 1

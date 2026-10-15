@@ -156,6 +156,7 @@ const getReadiness = asyncRoute(async (_req, res) => {
   const database = await db.checkHealth();
   let sourceRun = null;
   let latestFloodRun = null;
+  let latestFloodAttempt = null;
   let tableStatus = {};
   let sourceCounts = {};
   let populationStatus = { status: 'not_assessed', assessmentRows: 0 };
@@ -181,15 +182,26 @@ const getReadiness = asyncRoute(async (_req, res) => {
     sourceRun = sources.rows[0] || null;
     const flood = await db.query(`
       SELECT r.id,r.status,r.started_at,r.finished_at,r.metadata,
-             count(DISTINCT h.id)::int AS polygon_count,
+             COALESCE(NULLIF(r.metadata->>'candidate_polygon_count','')::int,
+                      NULLIF(r.metadata->'quality'->>'candidate_feature_count','')::int,
+                      NULLIF(r.metadata->'outputs'->>'candidate_polygons','')::int,
+                      count(DISTINCT h.id)::int) AS polygon_count,
              count(DISTINCT e.id)::int AS exposure_count
       FROM ingestion_runs r
       LEFT JOIN hazard_events h ON h.processing_run_id=r.id AND h.hazard_type='flood'
       LEFT JOIN asset_hazard_exposure e ON e.processing_run_id=r.id AND e.hazard_type='flood'
       WHERE r.pipeline_name IN ('oseas_sentinel1_flood_screen','oseas_prithvi_flood_screen')
+        AND r.status IN ('completed','partial')
       GROUP BY r.id ORDER BY r.started_at DESC LIMIT 1
     `).catch(() => ({ rows: [] }));
     latestFloodRun = flood.rows[0] || null;
+    const floodAttempt = await db.query(`
+      SELECT id,status,started_at,finished_at,error_message
+      FROM ingestion_runs
+      WHERE pipeline_name IN ('oseas_sentinel1_flood_screen','oseas_prithvi_flood_screen')
+      ORDER BY started_at DESC LIMIT 1
+    `).catch(() => ({ rows: [] }));
+    latestFloodAttempt = floodAttempt.rows[0] || null;
     const counts = await db.query(`
       SELECT (SELECT count(*)::int FROM energy_assets) AS energy_assets,
              (SELECT count(*)::int FROM critical_services) AS critical_services,
@@ -243,6 +255,7 @@ const getReadiness = asyncRoute(async (_req, res) => {
       inventory: { status: inventoryReady ? 'available' : 'incomplete' },
       outputSchema: { status: schemaReady ? 'installed' : 'incomplete', tables: tableStatus },
       latestFloodScreen: latestFloodRun ? { status: latestFloodRun.status, runId: latestFloodRun.id, candidatePolygons: latestFloodRun.polygon_count, exposureRows: latestFloodRun.exposure_count } : { status: 'not_run' },
+      latestFloodAttempt: latestFloodAttempt ? { status: latestFloodAttempt.status, runId: latestFloodAttempt.id, startedAt: latestFloodAttempt.started_at, finishedAt: latestFloodAttempt.finished_at, error: latestFloodAttempt.error_message } : { status: 'not_run' },
       usableHazardOutputs: Boolean(latestFloodRun && ['completed', 'partial'].includes(latestFloodRun.status) && Number(latestFloodRun.polygon_count) > 0),
       earthEngine: { configured: Boolean(process.env.GEE_PROJECT_ID), liveConnection: 'not_checked_by_readiness' },
       prithvi: { status: fs.existsSync(prithviCheckpoint) ? 'configured_not_validated' : 'model_bundle_not_downloaded', checkpointAvailable: fs.existsSync(prithviCheckpoint), model: 'Prithvi-EO-2.0-300M-TL-Sen1Floods11', task: 'Sentinel-2 L1C flood segmentation', validatedForKenya: false, reason: fs.existsSync(prithviCheckpoint) ? 'Task checkpoint is present; no independent Kenya validation has been completed' : 'Run npm run oseas:prithvi:setup to fetch the pinned task checkpoint' },

@@ -44,6 +44,16 @@ This April 2024 pilot did not use the separately supplied November 2023 Kenya fl
   - `outputs/prithvi/6860135c-5c64-4b9a-bfdb-b9f30a505b93/preview.png` — RGB scene with candidate overlay.
   - `outputs/prithvi/6860135c-5c64-4b9a-bfdb-b9f30a505b93/run_metadata.json` — parameters, source details, raster checks and validation flags.
 
+## Nairobi/Kiambu reference-window run (2026-10-15)
+
+- **Processing run:** `49910391-e43b-4bf6-8cd9-fadc737ce709`; **model run:** `9df5e311-ad20-4386-8f42-54c6d2832222`.
+- **AOI:** `37.0588,-1.2335,37.0788,-1.2135` (west,south,east,north), approximately 4.92 km2; event window 2024-04-29 through 2024-05-04.
+- **Scene:** `COPERNICUS/S2_HARMONIZED/20240502T073621_20240502T075440_T37MBU`, acquired `2024-05-02T08:00:28Z`. Scene-wide cloud was 62.9%; QA60 masking left 99.58% valid pixels in this AOI.
+- **Output:** official pinned inference completed in 205 seconds. It classified 4,504 valid pixels as water/flood candidates and generated 3 connected polygons, stored as one unioned MultiPolygon hazard event. The class raster has 168 no-data pixels.
+- **Asset/admin overlay:** zero energy assets are inside this AOI, so it produced no asset intersection rows. Four county/ward units were touched; none is fully covered, and their summaries remain partial/insufficient. This is a localized reference-window example, not a national map.
+- **Validation:** inference and geospatial grid checks passed; Kenya accuracy remains **NOT EVALUATED**. No precision, recall, or IoU is claimed. The output is not a confirmed flood footprint.
+- **Files:** `outputs/prithvi/49910391-e43b-4bf6-8cd9-fadc737ce709/` contains `sentinel2_l1c.tif`, `prithvi_class_labels.tif`, `flood_candidates.geojson`, `asset_exposures.geojson`, `administrative_summary.geojson`, `preview.png`, and `run_metadata.json`.
+
 ## Reproduction
 
 ```powershell
