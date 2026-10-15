@@ -4,6 +4,8 @@ from pathlib import Path
 
 from scripts.run_prithvi_flood import _configure_proj_data, _polygonize, _validate_and_mask_prediction, validate_args
 from argparse import Namespace
+from shapely.geometry import box
+from scripts.run_prithvi_national import _ensure_grid, _finalize, _zonal_pixel_stats, tile_dimensions
 
 _configure_proj_data()
 import numpy as np
@@ -12,6 +14,101 @@ from rasterio.transform import from_origin
 
 
 class PrithviFloodPipelineTests(unittest.TestCase):
+    def test_national_grid_sql_binds_every_parameter(self):
+        class Cursor:
+            def __init__(self):
+                self.calls = []
+
+            def execute(self, query, params=None):
+                self.calls.append((query, params))
+
+            def fetchone(self):
+                return (17,)
+
+        cursor = Cursor()
+        self.assertEqual(_ensure_grid(cursor, "fingerprint", "run-id", 64), 17)
+        grid_query, grid_params = cursor.calls[0]
+        self.assertEqual(grid_query.count("%s"), len(grid_params))
+        self.assertIn("ON CONFLICT (event_fingerprint,batch_id) DO NOTHING", grid_query)
+
+    def test_national_finalization_sql_binds_every_parameter(self):
+        class Cursor:
+            def __init__(self):
+                self.calls = []
+                self.rowcount = 0
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *_):
+                return False
+
+            def execute(self, query, params=None):
+                self.calls.append((query, params))
+                self.rowcount = 47
+
+            def fetchall(self):
+                return [("completed", 1)]
+
+        class Connection:
+            def __init__(self):
+                self.cursor_instance = Cursor()
+
+            def cursor(self):
+                return self.cursor_instance
+
+            def commit(self):
+                pass
+
+        connection = Connection()
+        result = _finalize(
+            connection,
+            "fingerprint",
+            "run-id",
+            "model-run-id",
+            {"overlap_pixels": 64, "event_start": "2024-01-01", "event_end": "2024-01-02"},
+            1,
+        )
+        self.assertEqual(result["status"], "completed")
+        for query, params in connection.cursor_instance.calls:
+            if params is not None:
+                self.assertEqual(query.count("%s"), len(params))
+
+    def test_national_prithvi_counts_only_the_non_overlapping_tile_core(self):
+        dimensions = tile_dimensions(64)
+        shape = (dimensions["chip_pixels"], dimensions["chip_pixels"])
+        labels = np.zeros(shape, dtype=np.uint8)
+        valid = np.ones(shape, dtype=bool)
+        jrc = np.zeros(shape, dtype=np.int16)
+        lakes = np.zeros(shape, dtype=bool)
+        margin = dimensions["overlap_pixels"] // 2
+        labels[margin + 10, margin + 10] = 1
+        labels[margin + 11, margin + 11] = 1
+        labels[margin + 12, margin + 12] = 1
+        labels[0, 0] = 1
+        jrc[margin + 11, margin + 11] = 90
+        lakes[margin + 12, margin + 12] = True
+        valid[margin + 13, margin + 13] = False
+        core_half_m = dimensions["stride_m"] / 2
+        stats = _zonal_pixel_stats(
+            labels,
+            valid,
+            jrc,
+            lakes,
+            [{
+                "id": "admin-unit",
+                "unit_level": "ward",
+                "geometry": box(-core_half_m, -core_half_m, core_half_m, core_half_m),
+            }],
+            (-dimensions["chip_size_m"] / 2, -dimensions["chip_size_m"] / 2,
+             dimensions["chip_size_m"] / 2, dimensions["chip_size_m"] / 2),
+            64,
+        )
+        self.assertEqual(len(stats), 1)
+        self.assertEqual(stats[0]["total_pixels"], dimensions["core_pixels"] ** 2)
+        self.assertEqual(stats[0]["valid_pixels"], dimensions["core_pixels"] ** 2 - 1)
+        self.assertEqual(stats[0]["candidate_pixels"], 1)
+
     def test_bbox_rejects_area_above_local_inference_limit(self):
         args = Namespace(
             bbox=[36.0, -1.0, 37.0, 0.0],

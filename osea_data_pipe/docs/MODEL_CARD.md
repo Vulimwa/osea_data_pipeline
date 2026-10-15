@@ -25,6 +25,14 @@
 - **Setup/runtime check:** `npm run oseas:prithvi:setup` downloads and verifies the pinned files, then automatically runs the official sample inference smoke test. The test passed on CPU in this environment. Runtime initializes from the task checkpoint weights and does not fetch the separate foundation checkpoint. This smoke test is not Kenya validation or OSEAS hazard output.
 - **Run:** after applying the current schema and completing inventory ingestion, run `npm run oseas:prithvi:flood -- --bbox <west> <south> <east> <north> --event-start YYYY-MM-DD --event-end YYYY-MM-DD`.
 
+## Nationwide tiled inference
+
+- **Entry point:** `npm run oseas:prithvi:national`, also invoked by `npm run oseas:run` when Prithvi event dates are configured.
+- **Model input size:** the pinned inference implementation uses 512×512 windows. At the worker's 10 m grid resolution, each chip is 5.12 km square. The worker defaults to 64 pixels of overlap, leaving a 448×448 core for pixel counting; it does not send 256×256 chips to this checkpoint.
+- **Acquisition and storage:** Earth Engine selects and prepares one Sentinel-2 chip at a time. The chip is downloaded to a temporary local directory for the local checkpoint inference and deleted when that tile completes. No country-size source or prediction raster is written. The persisted map output is administrative candidate-pixel and coverage summaries, not a per-pixel raster layer.
+- **Resumption and scale:** tiles are keyed by event fingerprint and status in PostGIS. Failed/pending work can be retried by rerunning with the same inputs; `OSEAS_PRITHVI_NATIONAL_MAX_TILES=1` supports a small smoke run before removing the cap. A full nationwide run may involve many thousands of tiles and can take a long time, particularly on CPU.
+- **Reporting:** query `/api/v1/oseas/layers/prithvi_national_summaries/geojson` for map-ready ward/county results, optionally filtering `eventFingerprint`; `/api/v1/oseas/administrative/{ward|county}/{id}/summary` also includes pixel statistics for national Prithvi records. Missing/low-coverage units remain `insufficient_data`; class 1 remains unvalidated water/flood candidate evidence.
+
 The model bundle is downloaded from the [official Hugging Face model repository](https://huggingface.co/ibm-nasa-geospatial/Prithvi-EO-2.0-300M-TL-Sen1Floods11). Checkpoint availability does not constitute local accuracy validation. Compare against an independent, held-out reference set and the Sentinel-1 threshold baseline before operational use.
 
 This configured checkpoint only produces the flood/water segmentation described above. It is not a burn-scar or land-cover-change checkpoint. Wildfire and environmental-change products need their own task-compatible checkpoint or conventional remote-sensing baseline, plus Kenya-specific validation; this pipeline does not label those hazards from the flood output.

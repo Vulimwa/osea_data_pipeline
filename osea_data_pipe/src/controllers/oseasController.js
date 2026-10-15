@@ -6,12 +6,23 @@ const db = require('../repositories/db');
 const { AppError } = require('../middleware/errorHandler');
 const catalog = require('../../config/data_catalog.json');
 
+function resolveProjectRoot(moduleDirectory = __dirname) {
+  const candidates = [
+    path.resolve(moduleDirectory, '../..'),
+    path.resolve(moduleDirectory, '..'),
+  ];
+  return candidates.find((candidate) => fs.existsSync(path.join(candidate, 'package.json'))) || process.cwd();
+}
+
+const projectRoot = resolveProjectRoot();
 const windProducts = {
   wind_speed_10m: { file: 'wind_speed_10m_map.tif', unit: 'm/s', datasetKey: 'global_wind_atlas_wind_speed_10m' },
   power_density_10m: { file: 'power_density_10m_map.tif', unit: 'W/m2', datasetKey: 'global_wind_atlas_power_density_10m' },
   air_density_10m: { file: 'air_density_10m_map.tif', unit: 'kg/m3', datasetKey: 'global_wind_atlas_air_density_10m' },
 };
-const windCacheDir = path.resolve(__dirname, '../..', 'data/raw/global_wind_atlas/KEN');
+const windCacheDir = path.join(projectRoot, 'data/raw/global_wind_atlas/KEN');
+const availableWindProducts = () => Object.entries(windProducts)
+  .filter(([, product]) => fs.existsSync(path.join(windCacheDir, product.file)));
 const mapLayerSql = {
   climate_observations: `SELECT id::text AS id,geom,jsonb_build_object('datasetKey',dataset_key,'variable',variable,'value',value,'unit',unit,'observedAt',observed_at,'processingRunId',processing_run_id) || source_properties AS properties FROM climate_observations`,
   rainfall: `SELECT o.id::text AS id,u.geom,jsonb_build_object('datasetKey',o.dataset_key,'variable',o.variable,'value',o.value,'unit',o.unit,'observedAt',o.observed_at,'processingRunId',o.processing_run_id) || o.source_properties AS properties FROM climate_observations o JOIN administrative_units u ON u.id::text=o.source_properties->>'reportingUnitId' WHERE o.dataset_key='chirps_daily' AND o.variable IN ('CHIRPS_30D_TOTAL_MM','CHIRPS_30D_ANOMALY_MM','CHIRPS_30D_ANOMALY_PERCENT')`,
@@ -32,7 +43,19 @@ const mapLayerSql = {
   asset_vulnerability: `SELECT v.id::text AS id,a.geom,jsonb_build_object('energyAssetId',a.id,'sourceDataset',a.source_dataset_key,'assetType',a.asset_type,'assetName',a.name,'status',v.status,'vulnerabilityClass',v.vulnerability_class,'score',v.score,'scoreStatus',CASE WHEN v.score IS NULL THEN CASE WHEN v.status='not_assessed' THEN 'not_assessed' ELSE 'withheld' END WHEN v.provenance ? 'pilot' THEN 'pilot_screening' ELSE 'source_assessment' END,'scoringScope',v.provenance->>'pilot','sensitivity',v.sensitivity,'adaptiveCapacity',v.adaptive_capacity,'missingEvidence',v.missing_evidence,'confidence',v.confidence,'method',v.method,'provenance',v.provenance,'processingRunId',v.processing_run_id) AS properties FROM asset_vulnerability_assessments v JOIN energy_assets a ON a.id=v.energy_asset_id`,
   asset_criticality: `SELECT c.id::text AS id,a.geom,jsonb_build_object('energyAssetId',a.id,'sourceDataset',a.source_dataset_key,'assetType',a.asset_type,'assetName',a.name,'status',c.status,'score',c.score,'method',c.method,'evidence',c.evidence,'confidence',c.confidence,'processingRunId',c.processing_run_id) AS properties FROM asset_criticality_assessments c JOIN energy_assets a ON a.id=c.energy_asset_id`,
   service_dependencies: `SELECT d.id::text AS id,a.geom,jsonb_build_object('energyAssetId',a.id,'sourceDataset',a.source_dataset_key,'assetType',a.asset_type,'assetName',a.name,'criticalServiceId',s.id,'serviceType',s.service_type,'serviceName',s.name,'verified',d.verified,'confidence',d.confidence,'evidenceDatasetKey',d.evidence_dataset_key,'evidence',d.evidence) AS properties FROM service_dependencies d JOIN energy_assets a ON a.id=d.energy_asset_id JOIN critical_services s ON s.id=d.critical_service_id`,
-  administrative_summaries: `SELECT s.id::text AS id,u.geom,jsonb_build_object('administrativeUnitId',u.id,'level',u.unit_level,'name',u.name,'hazardType',s.hazard_type,'eventFingerprint',s.event_fingerprint,'periodStart',s.period_start,'periodEnd',s.period_end,'assessmentStatus',s.assessment_status,'assignedAssets',s.assigned_energy_asset_count,'candidateExposedAssets',s.candidate_exposed_asset_count,'exposureFraction',s.candidate_exposure_fraction,'provenance',s.provenance,'processingRunId',s.processing_run_id) AS properties FROM administrative_hazard_summaries s JOIN administrative_units u ON u.id=s.administrative_unit_id`,
+  administrative_summaries: `SELECT s.id::text AS id,u.geom,jsonb_build_object('administrativeUnitId',u.id,'level',u.unit_level,'name',u.name,'hazardType',s.hazard_type,'eventFingerprint',s.event_fingerprint,'periodStart',s.period_start,'periodEnd',s.period_end,'assessmentStatus',s.assessment_status,'assignedAssets',s.assigned_energy_asset_count,'candidateExposedAssets',s.candidate_exposed_asset_count,'exposureFraction',s.candidate_exposure_fraction,'totalPixels',CASE WHEN s.provenance->>'pipeline'='prithvi_national_tiled' THEN s.total_pixels ELSE NULL END,'validPixels',CASE WHEN s.provenance->>'pipeline'='prithvi_national_tiled' THEN s.valid_pixels ELSE NULL END,'candidatePixels',CASE WHEN s.provenance->>'pipeline'='prithvi_national_tiled' THEN s.candidate_pixels ELSE NULL END,'candidateAreaM2',CASE WHEN s.provenance->>'pipeline'='prithvi_national_tiled' THEN s.candidate_area_m2 ELSE NULL END,'validCoverageFraction',CASE WHEN s.provenance->>'pipeline'='prithvi_national_tiled' THEN s.valid_coverage_fraction ELSE NULL END,'provenance',s.provenance,'processingRunId',s.processing_run_id) AS properties FROM administrative_hazard_summaries s JOIN administrative_units u ON u.id=s.administrative_unit_id`,
+  prithvi_national_summaries: `SELECT s.id::text AS id,u.geom,
+    jsonb_build_object('administrativeUnitId',u.id,'level',u.unit_level,'name',u.name,
+      'stableCode',u.stable_code,'hazardType',s.hazard_type,'eventFingerprint',s.event_fingerprint,
+      'periodStart',s.period_start,'periodEnd',s.period_end,'assessmentStatus',s.assessment_status,
+      'totalPixels',s.total_pixels,'validPixels',s.valid_pixels,'candidatePixels',s.candidate_pixels,
+      'candidateAreaM2',s.candidate_area_m2,
+      'candidateFraction',CASE WHEN s.valid_pixels>0 THEN s.candidate_pixels::double precision/s.valid_pixels ELSE NULL END,
+      'validCoverageFraction',s.valid_coverage_fraction,'assignedEnergyAssetCount',s.assigned_energy_asset_count,
+      'candidateExposedAssetCount',NULL,'scoreStatus','not_assessed',
+      'evidenceKind','modeled_candidate','provenance',s.provenance,'processingRunId',s.processing_run_id) AS properties
+    FROM administrative_hazard_summaries s JOIN administrative_units u ON u.id=s.administrative_unit_id
+    WHERE s.hazard_type='flood' AND s.provenance->>'pipeline'='prithvi_national_tiled'`,
   vulnerability_summaries: `SELECT s.id::text AS id,u.geom,jsonb_build_object('administrativeUnitId',u.id,'level','ward','name',u.name,'stableCode',u.stable_code,'summaryStatus',s.summary_status,'periodStart',s.period_start,'periodEnd',s.period_end,'assetCounts',s.asset_counts,'hazardCounts',s.hazard_counts,'confidence',s.confidence,'provenance',s.provenance,'assessmentRunId',s.assessment_run_id,'compositeScore',NULL,'scoreStatus','withheld') AS properties FROM ward_vulnerability_summary s JOIN administrative_units u ON u.id=s.ward_id UNION ALL SELECT s.id::text AS id,u.geom,jsonb_build_object('administrativeUnitId',u.id,'level','county','name',u.name,'stableCode',u.stable_code,'summaryStatus',s.summary_status,'periodStart',s.period_start,'periodEnd',s.period_end,'assetCounts',s.asset_counts,'hazardCounts',s.hazard_counts,'confidence',s.confidence,'provenance',s.provenance,'assessmentRunId',s.assessment_run_id,'compositeScore',NULL,'scoreStatus','withheld') AS properties FROM county_vulnerability_summary s JOIN administrative_units u ON u.id=s.county_id`,
   interventions: `SELECT i.id::text AS id,COALESCE(i.area,a.geom) AS geom,jsonb_build_object('energyAssetId',i.energy_asset_id,'action',i.action,'priority',i.priority,'status',i.status,'reason',i.reason,'evidence',i.evidence,'assumptions',i.assumptions,'confidence',i.confidence,'processingRunId',i.processing_run_id) AS properties FROM intervention_scenarios i LEFT JOIN energy_assets a ON a.id=i.energy_asset_id`,
   population_exposure: `SELECT id::text AS id,geom,jsonb_build_object('datasetKey',dataset_key,'hazardEventId',hazard_event_id,'reportingUnitId',reporting_unit_id,'populationTotal',population_total,'populationPotentiallyExposed',population_potentially_exposed,'assessmentStatus',assessment_status,'method',method,'evidence',evidence,'confidence',confidence,'processingRunId',processing_run_id) AS properties FROM population_exposure_assessments`,
@@ -52,6 +75,7 @@ const mapLayerCountSql = {
   asset_criticality: `SELECT count(*)::int FROM asset_criticality_assessments c JOIN energy_assets a ON a.id=c.energy_asset_id WHERE a.geom IS NOT NULL`,
   service_dependencies: `SELECT count(*)::int FROM service_dependencies d JOIN energy_assets a ON a.id=d.energy_asset_id JOIN critical_services s ON s.id=d.critical_service_id WHERE a.geom IS NOT NULL`,
   administrative_summaries: `SELECT count(*)::int FROM administrative_hazard_summaries s JOIN administrative_units u ON u.id=s.administrative_unit_id WHERE u.geom IS NOT NULL`,
+  prithvi_national_summaries: `SELECT count(*)::int FROM administrative_hazard_summaries s JOIN administrative_units u ON u.id=s.administrative_unit_id WHERE u.geom IS NOT NULL AND s.hazard_type='flood' AND s.provenance->>'pipeline'='prithvi_national_tiled'`,
   vulnerability_summaries: `SELECT ((SELECT count(*) FROM ward_vulnerability_summary s JOIN administrative_units u ON u.id=s.ward_id WHERE u.geom IS NOT NULL) + (SELECT count(*) FROM county_vulnerability_summary s JOIN administrative_units u ON u.id=s.county_id WHERE u.geom IS NOT NULL))::int`,
   interventions: `SELECT count(*)::int FROM intervention_scenarios i LEFT JOIN energy_assets a ON a.id=i.energy_asset_id WHERE coalesce(i.area,a.geom) IS NOT NULL`,
   population_exposure: `SELECT count(*)::int FROM population_exposure_assessments WHERE geom IS NOT NULL`,
@@ -125,6 +149,21 @@ function buildMapOutputFilter(layer, query) {
     values.push(validateSourceDataset(query.sourceDataset));
     predicates.push(`properties->>'sourceDataset'=$${values.length}`);
   }
+  if (query.eventFingerprint) {
+    if (layer !== 'prithvi_national_summaries') {
+      throw new AppError('UNSUPPORTED_FILTER', 'eventFingerprint is supported only for the national Prithvi summary layer', 400);
+    }
+    const fingerprint = String(query.eventFingerprint).trim();
+    if (!/^[a-f0-9]{64}$/i.test(fingerprint)) {
+      throw new AppError('INVALID_EVENT_FINGERPRINT', 'eventFingerprint must be a 64-character SHA-256 hex string', 400);
+    }
+    values.push(fingerprint.toLowerCase());
+    predicates.push(`properties->>'eventFingerprint'=$${values.length}`);
+  } else if (layer === 'prithvi_national_summaries') {
+    predicates.push(`properties->>'eventFingerprint'=(SELECT metadata->>'event_fingerprint'
+      FROM ingestion_runs WHERE pipeline_name='oseas_prithvi_national_screen'
+        AND status IN ('completed','partial') ORDER BY started_at DESC LIMIT 1)`);
+  }
   if (query.bbox) {
     const filter = bboxFilter(query.bbox, values.length + 1);
     predicates.push(filter.sql.replace(/^\s*AND\s+/i, ''));
@@ -177,7 +216,11 @@ function buildStoredLayerEntries(featureCounts = {}, availability = {}) {
       geometry: 'GeoJSON geometry',
       crs: 'EPSG:4326',
       endpoint: `/api/v1/oseas/layers/${layer}/geojson`,
-      ...(sourceFilterLayers.includes(layer) ? { filters: ['sourceDataset', 'bbox', 'limit', 'offset'] } : { filters: ['bbox', 'limit', 'offset'] }),
+      ...(layer === 'prithvi_national_summaries'
+        ? { filters: ['eventFingerprint', 'bbox', 'limit', 'offset'] }
+        : sourceFilterLayers.includes(layer)
+          ? { filters: ['sourceDataset', 'bbox', 'limit', 'offset'] }
+          : { filters: ['bbox', 'limit', 'offset'] }),
       ...(hasData === undefined ? {} : { hasData }),
       ...(featureCount === undefined ? {} : { featureCount }),
       status: hasData === undefined ? 'queryable' : (hasData ? 'available' : 'not_assessed'),
@@ -199,6 +242,7 @@ const getReadiness = asyncRoute(async (_req, res) => {
   let sourceCounts = {};
   let populationStatus = { status: 'not_assessed', assessmentRows: 0 };
   let environmentalStatus = { heatObservations: 0, fireDetections: 0, nightlightObservations: 0, rainfallObservations: 0 };
+  let prithviNationalStatus = { status: 'schema_missing', plannedTiles: 0, completedTiles: 0, countySummaries: 0, wardSummaries: 0 };
   if (database.connected) {
     const result = await db.query(`
       SELECT to_regclass('public.energy_assets') IS NOT NULL AS assets,
@@ -213,7 +257,12 @@ const getReadiness = asyncRoute(async (_req, res) => {
              to_regclass('public.grid_resilience_assessments') IS NOT NULL AS grid_resilience,
              to_regclass('public.ward_vulnerability_summary') IS NOT NULL AS ward_vulnerability_summary,
              to_regclass('public.county_vulnerability_summary') IS NOT NULL AS county_vulnerability_summary,
-             to_regclass('public.climate_observations') IS NOT NULL AS climate_observations
+             to_regclass('public.climate_observations') IS NOT NULL AS climate_observations,
+             to_regclass('public.prithvi_national_batches') IS NOT NULL AS prithvi_national_batches,
+             to_regclass('public.prithvi_national_admin_batch_stats') IS NOT NULL AS prithvi_national_admin_batch_stats,
+             EXISTS (SELECT 1 FROM information_schema.columns
+                     WHERE table_schema='public' AND table_name='administrative_hazard_summaries'
+                       AND column_name='candidate_pixels') AS prithvi_pixel_stats
     `);
     tableStatus = result.rows[0];
     const sources = await db.query(`SELECT status,started_at,finished_at,metadata FROM ingestion_runs WHERE pipeline_name='oseas_earth_engine_ingest' ORDER BY started_at DESC LIMIT 1`);
@@ -274,11 +323,59 @@ const getReadiness = asyncRoute(async (_req, res) => {
       status: population.rows[0].assessment_rows > 0 ? 'available' : 'not_assessed',
       ...population.rows[0],
     };
+    if (tableStatus.prithvi_national_batches && tableStatus.prithvi_national_admin_batch_stats && tableStatus.prithvi_pixel_stats) {
+      const national = await db.query(`
+        SELECT r.id,r.status,r.started_at,r.finished_at,r.metadata->>'event_fingerprint' AS event_fingerprint,
+          (SELECT count(*)::int FROM prithvi_national_batches b
+           WHERE b.event_fingerprint=r.metadata->>'event_fingerprint') AS planned_tiles,
+          (SELECT count(*)::int FROM prithvi_national_batches b
+           WHERE b.event_fingerprint=r.metadata->>'event_fingerprint' AND b.status='completed') AS completed_tiles,
+          (SELECT count(*)::int FROM prithvi_national_batches b
+           WHERE b.event_fingerprint=r.metadata->>'event_fingerprint' AND b.status='no_observation') AS no_observation_tiles,
+          (SELECT count(*)::int FROM prithvi_national_batches b
+           WHERE b.event_fingerprint=r.metadata->>'event_fingerprint' AND b.status='failed') AS failed_tiles,
+          (SELECT count(*)::int FROM prithvi_national_batches b
+           WHERE b.event_fingerprint=r.metadata->>'event_fingerprint' AND b.status IN ('pending','processing')) AS pending_tiles,
+          (SELECT count(*)::int FROM administrative_hazard_summaries s
+           JOIN administrative_units u ON u.id=s.administrative_unit_id
+           WHERE s.event_fingerprint=r.metadata->>'event_fingerprint' AND s.hazard_type='flood'
+             AND s.provenance->>'pipeline'='prithvi_national_tiled' AND u.unit_level='county') AS county_summaries,
+          (SELECT count(*)::int FROM administrative_hazard_summaries s
+           JOIN administrative_units u ON u.id=s.administrative_unit_id
+           WHERE s.event_fingerprint=r.metadata->>'event_fingerprint' AND s.hazard_type='flood'
+             AND s.provenance->>'pipeline'='prithvi_national_tiled' AND u.unit_level='ward') AS ward_summaries
+        FROM ingestion_runs r WHERE r.pipeline_name='oseas_prithvi_national_screen'
+        ORDER BY r.started_at DESC LIMIT 1
+      `).catch(() => ({ rows: [] }));
+      const latest = national.rows[0];
+      if (latest) {
+        prithviNationalStatus = {
+          status: latest.status === 'completed' ? 'available' : latest.status,
+          ...latest,
+          model: 'Prithvi-EO-2.0-300M-TL-Sen1Floods11',
+          executionLocation: 'pipeline_runner',
+          summaryLayer: '/api/v1/oseas/layers/prithvi_national_summaries/geojson',
+          validatedForKenya: false,
+        };
+      } else {
+        prithviNationalStatus = {
+          status: 'not_run',
+          plannedTiles: 0,
+          completedTiles: 0,
+          countySummaries: 0,
+          wardSummaries: 0,
+          executionLocation: 'pipeline_runner',
+          summaryLayer: '/api/v1/oseas/layers/prithvi_national_summaries/geojson',
+          validatedForKenya: false,
+        };
+      }
+    }
   }
-  const prithviModelDir = path.resolve(__dirname, '../..', process.env.PRITHVI_MODEL_DIR || 'models/prithvi/flood_sen1floods11');
+  const prithviModelDir = path.resolve(projectRoot, process.env.PRITHVI_MODEL_DIR || 'models/prithvi/flood_sen1floods11');
   const prithviCheckpoint = path.join(prithviModelDir, 'Prithvi-EO-V2-300M-TL-Sen1Floods11.pt');
+  const prithviCheckpointAvailable = fs.existsSync(prithviCheckpoint);
   const inventoryReady = tableStatus.assets === true && tableStatus.boundaries === true;
-  const schemaReady = inventoryReady && tableStatus.assignments === true && tableStatus.hazards === true && tableStatus.summaries === true && tableStatus.hydrography === true && tableStatus.flood_reference === true && tableStatus.coverage === true && tableStatus.population_exposure === true && tableStatus.grid_resilience === true && tableStatus.ward_vulnerability_summary === true && tableStatus.county_vulnerability_summary === true && tableStatus.climate_observations === true;
+  const schemaReady = inventoryReady && tableStatus.assignments === true && tableStatus.hazards === true && tableStatus.summaries === true && tableStatus.hydrography === true && tableStatus.flood_reference === true && tableStatus.coverage === true && tableStatus.population_exposure === true && tableStatus.grid_resilience === true && tableStatus.ward_vulnerability_summary === true && tableStatus.county_vulnerability_summary === true && tableStatus.climate_observations === true && tableStatus.prithvi_national_batches === true && tableStatus.prithvi_national_admin_batch_stats === true && tableStatus.prithvi_pixel_stats === true;
   const apiReady = database.connected === true && schemaReady;
   res.json({
     service: 'oseas-climate-risk-api',
@@ -295,9 +392,10 @@ const getReadiness = asyncRoute(async (_req, res) => {
       latestFloodScreen: latestFloodRun ? { status: latestFloodRun.status, runId: latestFloodRun.id, candidatePolygons: latestFloodRun.polygon_count, exposureRows: latestFloodRun.exposure_count } : { status: 'not_run' },
       latestFloodAttempt: latestFloodAttempt ? { status: latestFloodAttempt.status, runId: latestFloodAttempt.id, startedAt: latestFloodAttempt.started_at, finishedAt: latestFloodAttempt.finished_at, error: latestFloodAttempt.error_message } : { status: 'not_run' },
       usableHazardOutputs: Boolean(latestFloodRun && ['completed', 'partial'].includes(latestFloodRun.status) && Number(latestFloodRun.polygon_count) > 0),
+      prithviNational: prithviNationalStatus,
       earthEngine: { configured: Boolean(process.env.GEE_PROJECT_ID), liveConnection: 'not_checked_by_readiness' },
-      prithvi: { status: fs.existsSync(prithviCheckpoint) ? 'configured_not_validated' : 'model_bundle_not_downloaded', checkpointAvailable: fs.existsSync(prithviCheckpoint), model: 'Prithvi-EO-2.0-300M-TL-Sen1Floods11', task: 'Sentinel-2 L1C flood segmentation', validatedForKenya: false, reason: fs.existsSync(prithviCheckpoint) ? 'Task checkpoint is present; no independent Kenya validation has been completed' : 'Run npm run oseas:prithvi:setup to fetch the pinned task checkpoint' },
-      hazardScope: 'Bounded Sentinel-1 and Sentinel-2 Prithvi flood candidates are separate. NASA POWER heat screening is coarse air-temperature context; FIRMS points are fire detections, not perimeters. No calibrated failure, damage, outage, criticality, vulnerability, or resilience score is implied.'
+      prithvi: { status: prithviCheckpointAvailable ? 'configured_not_validated' : 'pipeline_managed', checkpointAvailable: prithviCheckpointAvailable, executionLocation: 'pipeline_runner', model: 'Prithvi-EO-2.0-300M-TL-Sen1Floods11', task: 'Sentinel-2 L1C flood segmentation', validatedForKenya: false, reason: prithviCheckpointAvailable ? 'Task checkpoint is present; no independent Kenya validation has been completed' : 'Inference runs in the national pipeline runner; this API serves persisted model outputs and does not require a local checkpoint copy' },
+      hazardScope: 'Bounded Sentinel-1 and nationwide tiled Sentinel-2 Prithvi flood candidates are separate. Prithvi admin summaries are candidate pixels with coverage/provenance, not verified inundation. NASA POWER heat screening is coarse air-temperature context; FIRMS points are fire detections, not perimeters. No calibrated failure, damage, outage, criticality, vulnerability, or resilience score is implied.'
     },
     timestamp: new Date().toISOString()
   });
@@ -306,8 +404,9 @@ const getReadiness = asyncRoute(async (_req, res) => {
 const getCatalog = asyncRoute(async (_req, res) => {
   const dbRows = await db.query('SELECT dataset_key,last_ingested_at FROM datasets ORDER BY dataset_key').catch(() => ({ rows: [] }));
   const byKey = new Map(dbRows.rows.map((row) => [row.dataset_key, row.last_ingested_at]));
-  const windCached = fs.existsSync(path.join(windCacheDir, 'manifest.json'));
-  const worldpopCached = fs.existsSync(path.resolve(__dirname, '../..', 'data/raw/worldpop/ken_pop_2024_CN_100m_R2025A_v1.json'));
+  const windCached = fs.existsSync(path.join(windCacheDir, 'manifest.json'))
+    && availableWindProducts().length === Object.keys(windProducts).length;
+  const worldpopCached = fs.existsSync(path.join(projectRoot, 'data/raw/worldpop/ken_pop_2024_CN_100m_R2025A_v1.json'));
   res.json({ data: catalog.map((source) => ({ ...source, retrieval_status: byKey.has(source.key) ? 'retrieved_in_persisted_run' : (worldpopCached && source.key === 'worldpop_global2_kenya_population_100m' ? 'downloaded_and_validated_locally_not_persisted' : (windCached && source.key.startsWith('global_wind_atlas_') ? 'retrieved_and_cached' : source.retrieval_status)), lastSuccessfulRun: byKey.get(source.key) || null })), count: catalog.length });
 });
 
@@ -471,6 +570,16 @@ const getWindResourceManifest = asyncRoute(async (_req, res) => {
   const manifestPath = path.join(windCacheDir, 'manifest.json');
   if (!fs.existsSync(manifestPath)) return res.json({ status: 'not_cached', products: Object.keys(windProducts).map((key) => ({ id: key, ...windProducts[key] })), syncCommand: 'npm run oseas:wind:sync' });
   const manifest = JSON.parse(await fs.promises.readFile(manifestPath, 'utf8'));
+  const availableProducts = availableWindProducts();
+  if (availableProducts.length !== Object.keys(windProducts).length) {
+    return res.json({
+      status: 'incomplete',
+      manifest,
+      availableProducts: availableProducts.map(([id]) => id),
+      missingProducts: Object.keys(windProducts).filter((id) => !availableProducts.some(([availableId]) => availableId === id)),
+      syncCommand: 'npm run oseas:wind:sync',
+    });
+  }
   res.json({ status: 'cached', manifest, mapLayers: Object.keys(windProducts).map((key) => ({ id: key, unit: windProducts[key].unit, url: `/api/v1/oseas/layers/wind_resource/${key}/geotiff`, mediaType: 'image/tiff' })) });
 });
 
@@ -537,7 +646,13 @@ const getAdminSummary = asyncRoute(async (req, res) => {
   const result = await db.query(`
     SELECT u.id,u.unit_level,u.name,u.stable_code,s.hazard_type,s.event_fingerprint,s.period_start,s.period_end,
            s.assessment_status,s.assigned_energy_asset_count,s.candidate_exposed_asset_count,
-           s.candidate_exposure_fraction,s.provenance,s.processing_run_id,ST_AsGeoJSON(u.geom)::json AS geometry,
+           s.candidate_exposure_fraction,
+           CASE WHEN s.provenance->>'pipeline'='prithvi_national_tiled' THEN s.total_pixels END AS total_pixels,
+           CASE WHEN s.provenance->>'pipeline'='prithvi_national_tiled' THEN s.valid_pixels END AS valid_pixels,
+           CASE WHEN s.provenance->>'pipeline'='prithvi_national_tiled' THEN s.candidate_pixels END AS candidate_pixels,
+           CASE WHEN s.provenance->>'pipeline'='prithvi_national_tiled' THEN s.candidate_area_m2 END AS candidate_area_m2,
+           CASE WHEN s.provenance->>'pipeline'='prithvi_national_tiled' THEN s.valid_coverage_fraction END AS valid_coverage_fraction,
+           s.provenance,s.processing_run_id,ST_AsGeoJSON(u.geom)::json AS geometry,
            v.id AS vulnerability_summary_id,v.summary_status AS vulnerability_summary_status,
            v.period_start AS vulnerability_period_start,v.period_end AS vulnerability_period_end,
            v.asset_counts AS vulnerability_asset_counts,v.hazard_counts AS vulnerability_hazard_counts,
@@ -554,7 +669,8 @@ const getAdminSummary = asyncRoute(async (req, res) => {
   `, [id, level]);
   if (!result.rows.length) throw new AppError('NOT_FOUND', `${level} boundary was not found`, 404);
   const row = result.rows[0];
-  res.json({ type: 'Feature', id: row.id, geometry: row.geometry, properties: { level: row.unit_level, name: row.name, stableCode: row.stable_code, hazardType: row.hazard_type, eventFingerprint: row.event_fingerprint, periodStart: row.period_start, periodEnd: row.period_end, assessmentStatus: row.assessment_status || 'not_assessed', assignedEnergyAssetCount: row.assigned_energy_asset_count, candidateExposedAssetCount: row.candidate_exposed_asset_count, candidateExposureFraction: row.candidate_exposure_fraction, provenance: parseJson(row.provenance, {}), vulnerabilitySummary: row.vulnerability_summary_id ? { id: row.vulnerability_summary_id, status: row.vulnerability_summary_status, periodStart: row.vulnerability_period_start, periodEnd: row.vulnerability_period_end, assetCounts: parseJson(row.vulnerability_asset_counts, {}), hazardCounts: parseJson(row.vulnerability_hazard_counts, {}), confidence: row.vulnerability_confidence, provenance: parseJson(row.vulnerability_provenance, {}), compositeScore: null, scoreStatus: 'withheld' } : { status: 'not_assessed', compositeScore: null } }, spatialReference: 'EPSG:4326' });
+  const isNationalPrithvi = parseJson(row.provenance, {}).pipeline === 'prithvi_national_tiled';
+  res.json({ type: 'Feature', id: row.id, geometry: row.geometry, properties: { level: row.unit_level, name: row.name, stableCode: row.stable_code, hazardType: row.hazard_type, eventFingerprint: row.event_fingerprint, periodStart: row.period_start, periodEnd: row.period_end, assessmentStatus: row.assessment_status || 'not_assessed', assignedEnergyAssetCount: row.assigned_energy_asset_count, candidateExposedAssetCount: row.candidate_exposed_asset_count, candidateExposureFraction: row.candidate_exposure_fraction, pixelStatsStatus: isNationalPrithvi ? 'available' : 'not_assessed', totalPixels: row.total_pixels, validPixels: row.valid_pixels, candidatePixels: row.candidate_pixels, candidateAreaM2: row.candidate_area_m2, candidateFraction: isNationalPrithvi && Number(row.valid_pixels) > 0 ? Number(row.candidate_pixels) / Number(row.valid_pixels) : null, validCoverageFraction: row.valid_coverage_fraction, provenance: parseJson(row.provenance, {}), vulnerabilitySummary: row.vulnerability_summary_id ? { id: row.vulnerability_summary_id, status: row.vulnerability_summary_status, periodStart: row.vulnerability_period_start, periodEnd: row.vulnerability_period_end, assetCounts: parseJson(row.vulnerability_asset_counts, {}), hazardCounts: parseJson(row.vulnerability_hazard_counts, {}), confidence: row.vulnerability_confidence, provenance: parseJson(row.vulnerability_provenance, {}), compositeScore: null, scoreStatus: 'withheld' } : { status: 'not_assessed', compositeScore: null } }, spatialReference: 'EPSG:4326' });
 });
 
 const getPriorities = asyncRoute(async (req, res) => {
@@ -563,4 +679,4 @@ const getPriorities = asyncRoute(async (req, res) => {
   res.json({ data: result.rows.map((row) => ({ ...row, evidence: parseJson(row.evidence, {}), assumptions: parseJson(row.assumptions, {}) })), pagination: { limit, offset }, status: result.rows.length ? 'available' : 'not_assessed' });
 });
 
-module.exports = { getReadiness, getCatalog, getRuns, getRun, getLayers, getFloodGeoJson, getHydrographyGeoJson, getFloodReferenceGeoJson, getMapOutputGeoJson, getPopulationExposureGeoJson, getWindResourceManifest, downloadWindResource, listAssets, getAssetExposure, getAssetVulnerability, getAssetCriticality, getAssetServiceDependencies, getAdminSummary, getPriorities, buildAssetListFilter, buildMapOutputFilter, mapAssetExposureRows, mapAssetVulnerabilityRows, buildStoredLayerEntries };
+module.exports = { getReadiness, getCatalog, getRuns, getRun, getLayers, getFloodGeoJson, getHydrographyGeoJson, getFloodReferenceGeoJson, getMapOutputGeoJson, getPopulationExposureGeoJson, getWindResourceManifest, downloadWindResource, listAssets, getAssetExposure, getAssetVulnerability, getAssetCriticality, getAssetServiceDependencies, getAdminSummary, getPriorities, buildAssetListFilter, buildMapOutputFilter, mapAssetExposureRows, mapAssetVulnerabilityRows, buildStoredLayerEntries, resolveProjectRoot, windCacheDir };

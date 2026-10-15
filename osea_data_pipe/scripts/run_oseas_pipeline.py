@@ -16,6 +16,11 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 LOCK = ROOT / "data" / ".oseas_pipeline.lock"
+WIND_MAP_FILES = {
+    "wind_speed_10m": "wind_speed_10m_map.tif",
+    "power_density_10m": "power_density_10m_map.tif",
+    "air_density_10m": "air_density_10m_map.tif",
+}
 from dotenv import load_dotenv
 load_dotenv(ROOT / ".env")
 
@@ -82,6 +87,27 @@ def run_stage(
 
 def python_run(script: str, *arguments: str) -> list[str]:
     return [sys.executable, script, *arguments]
+
+
+def validate_wind_resource_cache(cache_dir: Path | None = None) -> tuple[bool, str]:
+    """Require the manifest and every API-served map raster before reporting cache success."""
+    cache_dir = cache_dir or ROOT / "data" / "raw" / "global_wind_atlas" / "KEN"
+    manifest_path = cache_dir / "manifest.json"
+    try:
+        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return False, "Global Wind Atlas manifest is missing or invalid"
+    products = manifest.get("products") if isinstance(manifest, dict) else None
+    if not isinstance(products, dict):
+        return False, "Global Wind Atlas manifest has no products object"
+    for product, filename in WIND_MAP_FILES.items():
+        entry = products.get(product)
+        raster = cache_dir / filename
+        if not isinstance(entry, dict) or entry.get("map_file") != filename:
+            return False, f"Global Wind Atlas manifest is missing the expected map entry for {product}"
+        if not raster.is_file() or raster.stat().st_size == 0:
+            return False, f"Global Wind Atlas map raster is missing or empty: {filename}"
+    return True, "manifest and all three API-served GeoTIFFs are present"
 
 
 def active_python_processes(script_fragment: str) -> list[str]:
@@ -349,7 +375,7 @@ def wait_for_active_ntl(active_pids: list[str], stages: list[dict[str, object]],
 def build_report(
     stages: list[dict[str, object]],
     started_at: str,
-    image_downloads_enabled: bool = False,
+    image_downloads_enabled: bool = True,
 ) -> dict[str, object]:
     incomplete = [stage for stage in stages if stage["status"] in {"failed", "blocked", "partial"}]
     return {
@@ -384,11 +410,6 @@ def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--skip-earth-engine", action="store_true", help="Use already-ingested source features")
     parser.add_argument("--skip-worldpop-download", action="store_true", help="Require the selected WorldPop raster to exist locally")
-    parser.add_argument(
-        "--allow-image-downloads",
-        action="store_true",
-        help="Opt in to local WorldPop, Black Marble, and Prithvi image workflows",
-    )
     parser.add_argument("--active-ntl-timeout-minutes", type=int,
                         default=int(os.getenv("OSEAS_PIPELINE_ACTIVE_NTL_TIMEOUT_MINUTES", "1440")),
                         help="Wait limit for an already-running night-lights job (default: 24 hours; 0 waits indefinitely)")
@@ -400,8 +421,38 @@ def main() -> int:
     acquire_lock()
     try:
         if not run_stage("database preflight", ["node", "scripts/setup_database.js"], stages):
-            write_report(build_report(stages, pipeline_started_at, args.allow_image_downloads))
+            report = build_report(stages, pipeline_started_at)
+            report["wind_resource_cache_ready"] = "not_checked"
+            report["prithvi_model_ready"] = "not_checked"
+            write_report(report)
             return 1
+
+        wind_sync_ok = run_stage(
+            "Global Wind Atlas Kenya map products",
+            python_run("scripts/sync_global_wind_atlas.py"),
+            stages,
+        )
+        if wind_sync_ok:
+            wind_sync_ok, wind_detail = validate_wind_resource_cache()
+            stages[-1]["cache_verification"] = wind_detail
+            if not wind_sync_ok:
+                stages[-1]["status"] = "failed"
+                stages[-1]["reason"] = wind_detail
+        prithvi_bundle_ok = run_stage(
+            "Prithvi checkpoint acquisition",
+            python_run("scripts/download_prithvi_weights.py"),
+            stages,
+        )
+        if prithvi_bundle_ok:
+            prithvi_model_ok = run_stage(
+                "Prithvi model smoke validation",
+                python_run("scripts/check_prithvi.py"),
+                stages,
+            )
+        else:
+            prithvi_model_ok = False
+            stages.append({"stage": "Prithvi model smoke validation", "status": "blocked",
+                           "reason": "pinned checkpoint acquisition failed"})
 
         if args.skip_earth_engine or os.getenv("OSEAS_PIPELINE_SKIP_EE", "").lower() in {"1", "true", "yes"}:
             print("\n[Earth Engine source ingestion] SKIPPED: explicit skip; verifying persisted county/ward inventory", flush=True)
@@ -490,28 +541,23 @@ def main() -> int:
                                    "reused_persisted_output": True, **existing_ntl})
                     print(f"\n[NASA VIIRS Black Marble] REUSED: {existing_ntl['detail']}; run={existing_ntl['run_id']}", flush=True)
                 elif not ntl_output_check_failed:
-                    if not args.allow_image_downloads:
-                        stages.append({"stage": "NASA VIIRS Black Marble monthly radiance and context",
-                                       "status": "blocked",
-                                       "reason": "local image workflow disabled; use --allow-image-downloads to opt in"})
-                    else:
-                        ntl_started = datetime.now(timezone.utc)
-                        if run_stage("NASA VIIRS Black Marble monthly radiance and context",
-                                     python_run("scripts/ingest_viirs_black_marble.py"), stages):
-                            try:
-                                ntl_result = verify_ntl_result(ntl_started)
-                            except Exception as error:
-                                ntl_result = None
-                                ntl_failure = f"database output verification failed ({type(error).__name__})"
-                            else:
-                                ntl_failure = "the run exited successfully but no complete persisted output was found"
-                            if ntl_result is None:
-                                stages[-1]["status"] = "failed"
-                                stages[-1]["reason"] = ntl_failure
-                                print(f"[NASA VIIRS Black Marble] FAILED: {ntl_failure}", flush=True)
-                            else:
-                                stages[-1].update(ntl_result)
-                                print(f"[NASA VIIRS Black Marble] verified: {ntl_result['detail']}; run={ntl_result['run_id']}", flush=True)
+                    ntl_started = datetime.now(timezone.utc)
+                    if run_stage("NASA VIIRS Black Marble monthly radiance and context",
+                                 python_run("scripts/ingest_viirs_black_marble.py"), stages):
+                        try:
+                            ntl_result = verify_ntl_result(ntl_started)
+                        except Exception as error:
+                            ntl_result = None
+                            ntl_failure = f"database output verification failed ({type(error).__name__})"
+                        else:
+                            ntl_failure = "the run exited successfully but no complete persisted output was found"
+                        if ntl_result is None:
+                            stages[-1]["status"] = "failed"
+                            stages[-1]["reason"] = ntl_failure
+                            print(f"[NASA VIIRS Black Marble] FAILED: {ntl_failure}", flush=True)
+                        else:
+                            stages[-1].update(ntl_result)
+                            print(f"[NASA VIIRS Black Marble] verified: {ntl_result['detail']}; run={ntl_result['run_id']}", flush=True)
 
         unosat_ok = run_stage("UNOSAT flood reference ingest", python_run("scripts/ingest_unosat_flood_reference.py"), stages)
 
@@ -522,26 +568,19 @@ def main() -> int:
             stages.append({"stage": "CHIRPS 30-day rainfall totals and anomalies by county and ward", "status": "blocked",
                            "reason": "requires successful county/ward assignment and UNOSAT reference ingestion"})
 
-        if not args.allow_image_downloads:
-            download_ok = False
-            stages.append({"stage": "WorldPop acquisition", "status": "blocked",
-                           "reason": "local image workflow disabled; use --allow-image-downloads to opt in"})
-            stages.append({"stage": "WorldPop population exposure", "status": "blocked",
-                           "reason": "requires the opt-in local WorldPop image workflow and a successful UNOSAT ingest"})
+        worldpop_file = ROOT / "data" / "raw" / "worldpop" / "ken_pop_2024_CN_100m_R2025A_v1.tif"
+        if args.skip_worldpop_download:
+            download_ok = worldpop_file.exists()
+            stages.append({"stage": "WorldPop acquisition", "status": "skipped" if download_ok else "blocked",
+                           "reason": "download skipped; raster exists" if download_ok else "download skipped but required raster is missing"})
         else:
-            worldpop_file = ROOT / "data" / "raw" / "worldpop" / "ken_pop_2024_CN_100m_R2025A_v1.tif"
-            if args.skip_worldpop_download:
-                download_ok = worldpop_file.exists()
-                stages.append({"stage": "WorldPop acquisition", "status": "skipped" if download_ok else "blocked",
-                               "reason": "download skipped; raster exists" if download_ok else "download skipped but required raster is missing"})
-            else:
-                download_ok = run_stage("WorldPop acquisition and validation", python_run("scripts/download_worldpop_kenya.py"), stages)
-            if unosat_ok and download_ok:
-                run_stage("WorldPop event and administrative population exposure",
-                          python_run("scripts/run_worldpop_population_exposure.py", "--persist"), stages)
-            else:
-                stages.append({"stage": "WorldPop population exposure", "status": "blocked",
-                               "reason": "requires successful UNOSAT ingest and a validated WorldPop raster"})
+            download_ok = run_stage("WorldPop acquisition and validation", python_run("scripts/download_worldpop_kenya.py"), stages)
+        if unosat_ok and download_ok:
+            run_stage("WorldPop event and administrative population exposure",
+                      python_run("scripts/run_worldpop_population_exposure.py", "--persist"), stages)
+        else:
+            stages.append({"stage": "WorldPop population exposure", "status": "blocked",
+                           "reason": "requires successful UNOSAT ingest and a validated WorldPop raster"})
 
         fire_key = os.getenv("NASA_FIRMS_MAP_KEY", "").strip()
         fire_start = os.getenv("OSEAS_FIRE_START_DATE", "").strip()
@@ -578,31 +617,37 @@ def main() -> int:
             stages.append({"stage": "Sentinel-1 flood screening", "status": "blocked",
               "reason": "set OSEAS_FLOOD_BBOX, OSEAS_FLOOD_EVENT_START/END and OSEAS_FLOOD_BASELINE_START/END; no national dates or AOI are inferred"})
 
-        prithvi_bbox = os.getenv("OSEAS_PRITHVI_BBOX", "").strip() or bbox
         prithvi_start = os.getenv("OSEAS_PRITHVI_EVENT_START", "").strip() or event_start
         prithvi_end = os.getenv("OSEAS_PRITHVI_EVENT_END", "").strip() or event_end
         prithvi_max_cloud = os.getenv("OSEAS_PRITHVI_MAX_CLOUD_PERCENT", "30").strip() or "30"
+        prithvi_overlap = os.getenv("OSEAS_PRITHVI_OVERLAP_PIXELS", "64").strip() or "64"
         if not assignment_ok:
-            stages.append({"stage": "bounded Sentinel-2 Prithvi flood inference", "status": "blocked",
+            stages.append({"stage": "nationwide Sentinel-2 Prithvi tiled flood screening", "status": "blocked",
                            "reason": "requires current county/ward boundaries and assignments"})
-        elif not args.allow_image_downloads:
-            stages.append({"stage": "bounded Sentinel-2 Prithvi flood inference", "status": "blocked",
-                           "reason": "local image workflow disabled; use --allow-image-downloads to opt in"})
-        elif prithvi_bbox and prithvi_start and prithvi_end:
-            command = python_run("scripts/run_prithvi_flood.py", "--bbox", *prithvi_bbox.split(","),
+        elif not prithvi_model_ok:
+            stages.append({"stage": "nationwide Sentinel-2 Prithvi tiled flood screening", "status": "blocked",
+                           "reason": "pinned Prithvi checkpoint or smoke validation is unavailable"})
+        elif prithvi_start and prithvi_end:
+            command = python_run("scripts/run_prithvi_national.py",
                                  "--event-start", prithvi_start, "--event-end", prithvi_end,
-                                 "--max-cloud-percent", prithvi_max_cloud)
-            run_stage("bounded Sentinel-2 Prithvi flood inference", command, stages)
+                                 "--max-cloud-percent", prithvi_max_cloud,
+                                 "--overlap-pixels", prithvi_overlap)
+            max_tiles = os.getenv("OSEAS_PRITHVI_NATIONAL_MAX_TILES", "").strip()
+            if max_tiles:
+                command.extend(["--max-tiles", max_tiles])
+            run_stage("nationwide Sentinel-2 Prithvi tiled flood screening", command, stages,
+                      accepted_exit_codes=(0, 2))
         else:
-            stages.append({"stage": "bounded Sentinel-2 Prithvi flood inference", "status": "blocked",
-              "reason": "set OSEAS_PRITHVI_BBOX and OSEAS_PRITHVI_EVENT_START/END (or reuse the Sentinel-1 bbox/event dates); the model limits each inference to 5 km²"})
+            stages.append({"stage": "nationwide Sentinel-2 Prithvi tiled flood screening", "status": "blocked",
+              "reason": "set OSEAS_PRITHVI_EVENT_START/END (or reuse OSEAS_FLOOD_EVENT_START/END); national inference processes resumable 512x512 Sentinel-2 tiles and does not require a bbox"})
 
         run_stage("final database status", ["node", "scripts/oseas_status.js"], stages)
         report = build_report(
             stages,
             pipeline_started_at,
-            args.allow_image_downloads,
         )
+        report["wind_resource_cache_ready"] = wind_sync_ok
+        report["prithvi_model_ready"] = prithvi_model_ok
         write_report(report)
         return 0 if report["status"] == "completed_with_limitations" else 1
     finally:

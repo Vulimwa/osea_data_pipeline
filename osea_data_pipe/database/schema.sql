@@ -338,6 +338,59 @@ CREATE TABLE IF NOT EXISTS administrative_hazard_summaries (
   UNIQUE (administrative_unit_id, hazard_type, event_fingerprint)
 );
 CREATE INDEX IF NOT EXISTS idx_oseas_admin_hazard_summary ON administrative_hazard_summaries (hazard_type, period_start DESC);
+
+ALTER TABLE administrative_hazard_summaries
+  ADD COLUMN IF NOT EXISTS total_pixels BIGINT NOT NULL DEFAULT 0 CHECK (total_pixels >= 0),
+  ADD COLUMN IF NOT EXISTS valid_pixels BIGINT NOT NULL DEFAULT 0 CHECK (valid_pixels >= 0),
+  ADD COLUMN IF NOT EXISTS candidate_pixels BIGINT NOT NULL DEFAULT 0 CHECK (candidate_pixels >= 0),
+  ADD COLUMN IF NOT EXISTS candidate_area_m2 DOUBLE PRECISION NOT NULL DEFAULT 0 CHECK (candidate_area_m2 >= 0),
+  ADD COLUMN IF NOT EXISTS valid_coverage_fraction DOUBLE PRECISION
+    CHECK (valid_coverage_fraction IS NULL OR valid_coverage_fraction BETWEEN 0 AND 1);
+ALTER TABLE administrative_hazard_summaries
+  ALTER COLUMN candidate_exposed_asset_count DROP NOT NULL;
+
+CREATE TABLE IF NOT EXISTS prithvi_national_batches (
+  event_fingerprint TEXT NOT NULL,
+  batch_id TEXT NOT NULL,
+  grid_x BIGINT,
+  grid_y BIGINT,
+  processing_run_id UUID REFERENCES ingestion_runs(id) ON DELETE SET NULL,
+  batch_geom GEOMETRY(Polygon,4326) NOT NULL,
+  status TEXT NOT NULL CHECK (status IN ('pending','processing','completed','no_observation','failed')),
+  scene_ids JSONB NOT NULL DEFAULT '[]'::jsonb,
+  valid_pixels BIGINT NOT NULL DEFAULT 0 CHECK (valid_pixels >= 0),
+  candidate_pixels BIGINT NOT NULL DEFAULT 0 CHECK (candidate_pixels >= 0),
+  candidate_area_m2 DOUBLE PRECISION NOT NULL DEFAULT 0 CHECK (candidate_area_m2 >= 0),
+  candidate_event_id UUID REFERENCES hazard_events(id) ON DELETE SET NULL,
+  error_message TEXT,
+  processed_at TIMESTAMPTZ,
+  PRIMARY KEY (event_fingerprint, batch_id)
+);
+ALTER TABLE prithvi_national_batches
+  ADD COLUMN IF NOT EXISTS grid_x BIGINT,
+  ADD COLUMN IF NOT EXISTS grid_y BIGINT;
+CREATE INDEX IF NOT EXISTS idx_oseas_prithvi_national_batch_geom
+  ON prithvi_national_batches USING GIST (batch_geom);
+CREATE INDEX IF NOT EXISTS idx_oseas_prithvi_national_batch_status
+  ON prithvi_national_batches (event_fingerprint, status);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_oseas_prithvi_national_batch_grid
+  ON prithvi_national_batches (event_fingerprint, grid_x, grid_y)
+  WHERE grid_x IS NOT NULL AND grid_y IS NOT NULL;
+
+CREATE TABLE IF NOT EXISTS prithvi_national_admin_batch_stats (
+  event_fingerprint TEXT NOT NULL,
+  batch_id TEXT NOT NULL,
+  administrative_unit_id UUID NOT NULL REFERENCES administrative_units(id) ON DELETE CASCADE,
+  total_pixels BIGINT NOT NULL CHECK (total_pixels >= 0),
+  valid_pixels BIGINT NOT NULL DEFAULT 0 CHECK (valid_pixels >= 0),
+  candidate_pixels BIGINT NOT NULL DEFAULT 0 CHECK (candidate_pixels >= 0),
+  PRIMARY KEY (event_fingerprint, batch_id, administrative_unit_id),
+  FOREIGN KEY (event_fingerprint, batch_id)
+    REFERENCES prithvi_national_batches(event_fingerprint, batch_id) ON DELETE CASCADE
+);
+CREATE INDEX IF NOT EXISTS idx_oseas_prithvi_national_admin_stats_unit
+  ON prithvi_national_admin_batch_stats (event_fingerprint, administrative_unit_id);
+
 CREATE TABLE IF NOT EXISTS intervention_scenarios (
   id UUID PRIMARY KEY DEFAULT gen_random_uuid(), energy_asset_id UUID REFERENCES energy_assets(id) ON DELETE CASCADE,
   area GEOMETRY(Geometry,4326), action TEXT NOT NULL, priority TEXT,
@@ -422,4 +475,3 @@ CREATE TABLE IF NOT EXISTS assessment_provenance (
   model_run_id UUID REFERENCES model_runs(id) ON DELETE SET NULL,
   method TEXT, parameters JSONB NOT NULL DEFAULT '{}'::jsonb, created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
-

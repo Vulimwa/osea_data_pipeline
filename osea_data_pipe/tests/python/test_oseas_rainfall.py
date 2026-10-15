@@ -1,5 +1,7 @@
+import json
 import sys
 import unittest
+import tempfile
 from datetime import date
 from pathlib import Path
 from types import SimpleNamespace
@@ -14,7 +16,13 @@ from ingest_chirps_rainfall import (  # noqa: E402
     event_window,
     stable_observation_id,
 )
-from run_oseas_pipeline import build_report, run_stage, validate_inventory_result, validate_ntl_result  # noqa: E402
+from run_oseas_pipeline import (  # noqa: E402
+    build_report,
+    run_stage,
+    validate_inventory_result,
+    validate_ntl_result,
+    validate_wind_resource_cache,
+)
 
 
 class ChirpsRainfallTests(unittest.TestCase):
@@ -47,11 +55,30 @@ class ChirpsRainfallTests(unittest.TestCase):
         report = build_report([{"stage": "rainfall", "status": "blocked", "reason": "missing input"}], "start")
         self.assertEqual(report["status"], "partial")
         self.assertEqual(report["incomplete_stage_count"], 1)
-        self.assertFalse(report["image_downloads_enabled"])
+        self.assertTrue(report["image_downloads_enabled"])
 
-    def test_pipeline_report_records_explicit_image_workflow_opt_in(self):
+    def test_pipeline_report_records_image_workflows_enabled(self):
         report = build_report([], "start", image_downloads_enabled=True)
         self.assertTrue(report["image_downloads_enabled"])
+
+    def test_wind_cache_verification_requires_manifest_and_all_api_rasters(self):
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            cache_dir = Path(temporary_directory)
+            self.assertEqual(validate_wind_resource_cache(cache_dir)[0], False)
+            products = {
+                "wind_speed_10m": "wind_speed_10m_map.tif",
+                "power_density_10m": "power_density_10m_map.tif",
+                "air_density_10m": "air_density_10m_map.tif",
+            }
+            manifest = {"products": {key: {"map_file": filename} for key, filename in products.items()}}
+            (cache_dir / "manifest.json").write_text(json.dumps(manifest), encoding="utf-8")
+            for filename in products.values():
+                (cache_dir / filename).write_bytes(b"map-data")
+            self.assertTrue(validate_wind_resource_cache(cache_dir)[0])
+            (cache_dir / "air_density_10m_map.tif").unlink()
+            valid, detail = validate_wind_resource_cache(cache_dir)
+            self.assertFalse(valid)
+            self.assertIn("air_density_10m_map.tif", detail)
 
     def test_pipeline_report_does_not_call_partial_stages_complete(self):
         report = build_report([{"stage": "inventory", "status": "partial"}], "start")

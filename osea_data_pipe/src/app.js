@@ -80,7 +80,7 @@ const getEngineInfo = (req, res) => {
     description: "Kenya energy infrastructure and climate hazard evidence API.",
     status: "available; see readiness checks before use",
     pipeline:
-      "Earth Engine source ingestion -> PostGIS -> bounded hazard assessment -> GeoJSON API",
+      "Earth Engine source ingestion -> PostGIS -> bounded and nationwide tiled hazard assessment -> GeoJSON API",
     endpoints: {
       health: "/health",
       oseas: {
@@ -93,6 +93,7 @@ const getEngineInfo = (req, res) => {
         layers: "/api/v1/oseas/layers",
         flood_candidates: "/api/v1/oseas/layers/flood_candidate/geojson",
         flood_reference: "/api/v1/oseas/layers/flood_reference/geojson",
+        prithvi_national_summaries: "/api/v1/oseas/layers/prithvi_national_summaries/geojson",
         hydrography: "/api/v1/oseas/layers/hydrography/geojson",
         wind_resource: "/api/v1/oseas/layers/wind_resource",
       },

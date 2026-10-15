@@ -2,9 +2,17 @@
 
 const test = require('node:test');
 const assert = require('node:assert/strict');
+const path = require('node:path');
 const request = require('supertest');
 const app = require('../../src/app');
-const { buildAssetListFilter, buildMapOutputFilter, mapAssetExposureRows, mapAssetVulnerabilityRows, buildStoredLayerEntries } = require('../../src/controllers/oseasController');
+const { buildAssetListFilter, buildMapOutputFilter, mapAssetExposureRows, mapAssetVulnerabilityRows, buildStoredLayerEntries, resolveProjectRoot, windCacheDir } = require('../../src/controllers/oseasController');
+
+test('API cache paths resolve to the project root in source and bundled layouts', () => {
+  const projectRoot = path.resolve(__dirname, '../..');
+  assert.equal(resolveProjectRoot(path.join(projectRoot, 'src', 'controllers')), projectRoot);
+  assert.equal(resolveProjectRoot(path.join(projectRoot, 'dist')), projectRoot);
+  assert.equal(windCacheDir, path.join(projectRoot, 'data', 'raw', 'global_wind_atlas', 'KEN'));
+});
 
 test('root metadata identifies OSEAS and exposes integration readiness route', async () => {
   const response = await request(app).get('/');
@@ -13,6 +21,7 @@ test('root metadata identifies OSEAS and exposes integration readiness route', a
   assert.equal(response.body.endpoints.oseas.readiness, '/api/v1/oseas/readiness');
   assert.equal(response.body.endpoints.oseas.asset_vulnerability, '/api/v1/oseas/assets/{id}/vulnerability');
   assert.equal(response.body.endpoints.oseas.vulnerability_layer, '/api/v1/oseas/layers/asset_vulnerability/geojson');
+  assert.equal(response.body.endpoints.oseas.prithvi_national_summaries, '/api/v1/oseas/layers/prithvi_national_summaries/geojson');
   assert.doesNotMatch(JSON.stringify(response.body), /Kilimani/i);
 });
 
@@ -26,6 +35,22 @@ test('stored layer catalog reports persisted availability and counts per output'
   assert.equal(nightlights.featureCount, 0);
   assert.equal(nightlights.status, 'not_assessed');
   assert.equal(exposure.endpoint, '/api/v1/oseas/layers/asset_exposure/geojson');
+});
+
+test('national Prithvi summary layer supports event-fingerprint filtering', () => {
+  const fingerprint = 'a'.repeat(64);
+  const filter = buildMapOutputFilter('prithvi_national_summaries', { eventFingerprint: fingerprint });
+  assert.match(filter.where, /properties->>'eventFingerprint'=\$1/);
+  assert.deepEqual(filter.values, [fingerprint]);
+  const layer = buildStoredLayerEntries().find((item) => item.layer === 'prithvi_national_summaries');
+  assert.equal(layer.endpoint, '/api/v1/oseas/layers/prithvi_national_summaries/geojson');
+  assert.ok(layer.filters.includes('eventFingerprint'));
+});
+
+test('national Prithvi layer rejects malformed event fingerprints before querying', async () => {
+  const response = await request(app).get('/api/v1/oseas/layers/prithvi_national_summaries/geojson?eventFingerprint=invalid');
+  assert.equal(response.status, 400);
+  assert.equal(response.body.error.code, 'INVALID_EVENT_FINGERPRINT');
 });
 
 test('stored layer catalog stays fast by leaving data availability unclaimed without counts', () => {

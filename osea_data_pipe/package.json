@@ -34,7 +34,8 @@
     "oseas:wind:sync": "python scripts/sync_global_wind_atlas.py",
     "oseas:flood:screen": "python scripts/run_flood_screen.py",
     "oseas:prithvi:setup": "python scripts/download_prithvi_weights.py && python scripts/check_prithvi.py",
-    "oseas:prithvi:flood": "python scripts/run_prithvi_flood.py"
+    "oseas:prithvi:flood": "python scripts/run_prithvi_flood.py",
+    "oseas:prithvi:national": "python scripts/run_prithvi_national.py"
   },
   "dependencies": {
     "@google/genai": "^2.4.0",

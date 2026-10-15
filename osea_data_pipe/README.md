@@ -7,7 +7,7 @@ OSEAS reads the supplied Kenya energy-infrastructure assets from Earth Engine, w
 - Paged, batched, idempotent infrastructure ingestion with a single-writer lock and page-level progress.
 - Shared registry of the requested satellite, climate, terrain, fire, flood-reference and supporting datasets, with honest per-source retrieval states.
 - Additive PostGIS schema for source provenance, source-preserving rivers/lakes and flood-reference polygons, spatial coverage, assets, exposure, summaries, population-exposure and grid-resilience records.
-- Bounded Sentinel-1 and Prithvi flood-candidate workflows with JRC and configured lake masks; the Prithvi model still receives only its six expected Sentinel-2 channels.
+- Bounded Sentinel-1 screening, bounded Prithvi pilot inference, and resumable nationwide tiled Prithvi screening with JRC and configured lake masks; the model receives only its six expected Sentinel-2 channels.
 - Map-ready GeoJSON routes for stored climate, terrain, fire, exposure, vulnerability, dependency, coverage, population, resilience, summary and intervention outputs.
 - Verified Global Wind Atlas country GeoTIFF cache and resource-layer endpoints.
 - Read-only OSEAS API and readiness routes under `/api/v1/oseas`.
@@ -25,7 +25,7 @@ Flood candidates are screening evidence, not confirmed inundation or a calibrate
 6. Inspect `outputs/last_pipeline_run.json`, `npm run oseas:status`, and the read-only layers under `/api/v1/oseas`.
 
 The 2026-10-15 audit found the latest ingestion run terminal `partial` (one source failed); it was not still processing. The ward-geometry fix is unit-tested, but the database has not been refreshed with it. For the safe recovery and verification sequence, use the “Recovery after an abrupt shutdown” section in the runbook before starting downstream processing.
-The single command preserves existing rows and uses source-key upserts. It does not run `clean`, stale-run recovery, or local image workflows by default. The optional Kano demo is an API-only filter over the separate published pilot (`sourceDataset=osm_kano_pilot` and its bbox); it does not narrow or replace nationwide processing. The requested indicator/output checklist is in [`../outputs.md`](../outputs.md); report stages that are unsupported or blocked remain explicit rather than being marked complete.
+The single command preserves existing rows and uses source-key upserts. It syncs the Global Wind Atlas API cache, obtains and smoke-tests the pinned Prithvi checkpoint, and runs configured processing. When `OSEAS_PRITHVI_EVENT_START/END` are set, it runs the resumable nationwide Prithvi worker; that worker uses the checkpoint's 512×512 input and streams one temporary Earth Engine chip to local inference at a time. It does not retain a Kenya-wide source or prediction raster. The separate `oseas:prithvi:flood` command remains capped at 5 km² for bounded pilots. The optional Kano demo is an API-only filter over the separate published pilot (`sourceDataset=osm_kano_pilot` and its bbox); it does not narrow or replace nationwide processing. The requested indicator/output checklist is in [`../outputs.md`](../outputs.md); unsupported or unconfigured sources remain explicit in the pipeline report.
 
 ## Documentation
 

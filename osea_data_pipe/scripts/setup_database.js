@@ -14,7 +14,7 @@ async function main() {
   const result = await db.query(`
     SELECT table_name, column_name FROM information_schema.columns
     WHERE table_schema = 'public' AND table_name = ANY($1::text[])
-  `, [["datasets", "ingestion_runs", "dataset_versions", "data_quality_checks", "energy_assets", "network_lines", "substations", "distribution_transformers", "power_stations", "mini_grids", "critical_services", "service_dependencies", "administrative_units", "asset_admin_assignments", "climate_observations", "climate_projections", "hazard_events", "flood_extents", "fire_events", "terrain_metrics", "land_cover_metrics", "model_runs", "asset_hazard_exposure", "asset_vulnerability_assessments", "asset_criticality_assessments", "service_dependency_assessments", "ward_vulnerability_summary", "county_vulnerability_summary", "administrative_hazard_summaries", "intervention_scenarios", "assessment_provenance", "hydrography_features", "flood_reference_features", "spatial_coverage_assessments", "population_exposure_assessments", "grid_resilience_assessments"]]);
+  `, [["datasets", "ingestion_runs", "dataset_versions", "data_quality_checks", "energy_assets", "network_lines", "substations", "distribution_transformers", "power_stations", "mini_grids", "critical_services", "service_dependencies", "administrative_units", "asset_admin_assignments", "climate_observations", "climate_projections", "hazard_events", "flood_extents", "fire_events", "terrain_metrics", "land_cover_metrics", "model_runs", "asset_hazard_exposure", "asset_vulnerability_assessments", "asset_criticality_assessments", "service_dependency_assessments", "ward_vulnerability_summary", "county_vulnerability_summary", "administrative_hazard_summaries", "prithvi_national_batches", "prithvi_national_admin_batch_stats", "intervention_scenarios", "assessment_provenance", "hydrography_features", "flood_reference_features", "spatial_coverage_assessments", "population_exposure_assessments", "grid_resilience_assessments"]]);
   const columns = new Map();
   for (const row of result.rows) {
     if (!columns.has(row.table_name)) columns.set(row.table_name, new Set());
@@ -38,7 +38,9 @@ async function main() {
     flood_extents: ["hazard_event_id", "observation_start", "observation_end", "method", "area_km2", "quality"],
     asset_hazard_exposure: ["id", "energy_asset_id", "hazard_event_id", "hazard_type", "exposure_status", "evidence_kind", "provenance", "processing_run_id"],
     model_runs: ["id", "model_name", "model_version", "task", "parameters", "metrics", "status", "processing_run_id"],
-    administrative_hazard_summaries: ["id", "administrative_unit_id", "hazard_type", "event_fingerprint", "assessment_status", "candidate_exposed_asset_count", "provenance", "processing_run_id"],
+    administrative_hazard_summaries: ["id", "administrative_unit_id", "hazard_type", "event_fingerprint", "assessment_status", "candidate_exposed_asset_count", "provenance", "processing_run_id", "total_pixels", "valid_pixels", "candidate_pixels", "candidate_area_m2", "valid_coverage_fraction"],
+    prithvi_national_batches: ["event_fingerprint", "batch_id", "grid_x", "grid_y", "batch_geom", "status", "scene_ids", "valid_pixels", "candidate_pixels", "candidate_area_m2"],
+    prithvi_national_admin_batch_stats: ["event_fingerprint", "batch_id", "administrative_unit_id", "total_pixels", "valid_pixels", "candidate_pixels"],
     hydrography_features: ["id", "dataset_key", "source_feature_id", "feature_type", "source_properties", "geom", "processing_run_id"],
     flood_reference_features: ["id", "dataset_key", "source_feature_id", "event_key", "event_date", "source_properties", "event_metadata", "geom", "processing_run_id"],
     spatial_coverage_assessments: ["id", "coverage_status", "area_coverage_fraction", "valid_data_fraction", "observation_footprint", "valid_data_footprint", "validation_status", "provenance"],

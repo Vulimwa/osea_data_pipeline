@@ -5,7 +5,7 @@ services:
     rootDir: osea_data_pipe
     region: frankfurt
     plan: free
-    buildCommand: npm ci && npm run build
+    buildCommand: npm ci && python3 -m pip install --break-system-packages --user --disable-pip-version-check --no-cache-dir numpy rasterio requests && python3 scripts/sync_global_wind_atlas.py && npm run build
     startCommand: npm start
     healthCheckPath: /health/ready
     maxShutdownDelaySeconds: 30

@@ -41,7 +41,7 @@ For a hosted API, set `NODE_ENV=production`, `DB_URL` to the Supabase Postgres p
 
 ## Render API deployment
 
-The repository-root [`render.yaml`](../../render.yaml) defines the API service only. Render uses `osea_data_pipe` as the service root, runs `npm ci && npm run build`, starts `npm start`, and checks `/health/ready`. It connects to the existing Supabase database; the Blueprint does not create a database or run schema changes. The health check returns only whether PostGIS is reachable and never returns database error text or Earth Engine credential paths.
+The repository-root [`render.yaml`](../../render.yaml) defines the API service only. Render uses `osea_data_pipe` as the service root, installs the minimal Python raster dependencies, syncs the three Global Wind Atlas map products into the build image, runs `npm run build`, starts `npm start`, and checks `/health/ready`. This makes the wind resource manifest and GeoTIFFs available to the deployed API; deploy the updated Blueprint to populate its cache. It connects to the existing Supabase database; the Blueprint does not create a database or run schema changes. The health check returns only whether PostGIS is reachable and never returns database error text or Earth Engine credential paths.
 
 During Blueprint setup, provide these server-side values when Render prompts for them:
 
