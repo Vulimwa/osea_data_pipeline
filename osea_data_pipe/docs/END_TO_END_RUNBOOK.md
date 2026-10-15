@@ -59,6 +59,29 @@ It performs database preflight, configured Earth Engine feature ingestion, count
 
 The current first flood screens use a 4.92 km² AOI around the Nairobi/Kiambu UNOSAT reference polygon (`37.0588,-1.2335,37.0788,-1.2135`), with event imagery from 2024-04-29 through 2024-05-04 and a pre-event Sentinel-1 baseline from 2024-03-15 through 2024-04-28 (45 days). This is one localized pilot window; county/ward summaries only cover reporting units intersecting that AOI and must not be described as a national Prithvi map. The bounded Sentinel-1 flood event stage uses `OSEAS_FLOOD_BBOX`, `OSEAS_FLOOD_EVENT_START/END`, and `OSEAS_FLOOD_BASELINE_START/END`. Prithvi uses `OSEAS_PRITHVI_BBOX`, `OSEAS_PRITHVI_EVENT_START/END`, and `OSEAS_PRITHVI_MAX_CLOUD_PERCENT` (default 30); scene-wide cloud filtering is followed by QA60 masking and a 50% AOI-local clear-pixel minimum. The sample uses 100 because the 2024-05-02 scene has 62.9% scene-wide cloud but 99.6% clear pixels within the selected AOI. Each Prithvi run is capped at 5 km² and writes candidate polygons, asset intersections, county/ward summaries and model provenance to PostGIS. Inference is not Kenya validation. `OSEAS_HEAT_START_DATE`, `OSEAS_HEAT_END_DATE`, and `OSEAS_HEAT_SCREEN_THRESHOLD_C` configure heat processing (defaults: 2024 and 35 C). `OSEAS_FIRE_START_DATE/END` optionally select a historical FIRMS window. `OSEAS_FIRE_BBOX` can narrow the request envelope; an empty value derives it from Kenya county boundaries. The adapter filters returned points to those exact boundaries. `OSEAS_FIRE_SENSOR` defaults to `VIIRS_SNPP_NRT`, and `OSEAS_FIRE_PROXIMITY_KM` defaults to 5.
 
+## 1c. Recovery after an abrupt shutdown
+
+The last audit found no active Earth Engine importer, Black Marble job or orchestrator process. The newest inventory run (`5c3d9c73-fb0a-41f6-8b35-c38ee4880021`) is already terminal `partial`; its failed ward source is not still processing. A regression fix now extracts polygonal members from ward/county `GeometryCollection` features, but the live database has not yet been refreshed with it.
+
+Before any new database write, rotate any database credential that has been exposed, update the local `.env` without pasting or logging the value, and verify the configured Earth Engine account and database access. Then, from `osea_data_pipe`:
+
+```powershell
+npm run db:setup
+npm run oseas:audit
+npm run oseas:ingest
+npm run oseas:status
+```
+
+`npm run oseas:ingest` is safe to rerun: it uses deterministic source keys, page-level transactions and a PostgreSQL advisory lock. It can still finish `partial` when individual source geometries are unusable. Inspect its terminal status, per-asset result and quality details; specifically confirm `kenya_wards` no longer fails and review the 148 previously skipped line features. Do not infer that a source is complete merely because its earlier pages committed.
+
+Only after the ward source is successful and the inventory result is reviewed, continue with:
+
+```powershell
+npm run oseas:pipeline -- --skip-earth-engine --skip-worldpop-download
+```
+
+This avoids repeating the just-verified source import and the already-downloaded WorldPop raster, while refreshing assignments and running the configured downstream stages. Black Marble may take a long time; the orchestrator is designed to resume checkpoints, refuse duplicate jobs and verify persisted rows before reporting completion. Inspect `outputs/last_pipeline_run.json` and `npm run oseas:status` after it exits. If any prerequisite stage failed, stop and address it rather than presenting downstream results as accepted. Never delete a lock file while its recorded process might still be active.
+
 ### CHIRPS rainfall event context
 
 Run `npm run oseas:rainfall` directly or use the single pipeline command. The adapter reads persisted, dated flood reference events and county/ward geometries, calculates the 30-day CHIRPS total ending on each event date, and compares it with same-calendar 30-day totals from 2001–2020. It persists total, absolute anomaly and percentage anomaly (percentage is null when the baseline is zero) to `climate_observations` with deterministic IDs, source-version checksum, quality checks and run provenance. Reporting units are processed in batches; each batch refreshes a durable run lease and prints progress. An expired lease is recoverable after interruption, and output IDs make reruns idempotent. The API map layer is `/api/v1/oseas/layers/rainfall/geojson`. These summaries describe gridded rainfall context; they do not establish flood extent, asset damage or service outage. No SQL migration is required because this reuses the existing OSEAS climate-observation schema.

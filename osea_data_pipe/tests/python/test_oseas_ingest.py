@@ -1,3 +1,4 @@
+import json
 import unittest
 from types import SimpleNamespace
 from unittest.mock import patch
@@ -107,6 +108,51 @@ class OseasIngestTests(unittest.TestCase):
         self.assertEqual(cursor.batches[0][1][0][4], "123")
         self.assertIn('"County2": "Example"', cursor.batches[0][1][0][7])
         self.assertEqual(len(cursor.statements), 1)  # dataset freshness is updated once per page
+
+    def test_ward_geometry_collection_keeps_polygonal_components_only(self):
+        spec = next(asset for asset in ASSETS if asset.key == "kenya_wards")
+        polygon = {
+            "type": "Polygon",
+            "coordinates": [[[36.0, -1.0], [37.0, -1.0], [37.0, -2.0], [36.0, -1.0]]],
+        }
+        feature = {
+            "id": "ward-collection",
+            "geometry": {
+                "type": "GeometryCollection",
+                "geometries": [
+                    {"type": "LineString", "coordinates": [[36.0, -1.0], [37.0, -2.0]]},
+                    polygon,
+                ],
+            },
+            "properties": {"uid": "W001"},
+        }
+        cursor = RecordingCursor()
+
+        _persist_feature_page(cursor, "run-id", spec, "asset-id", [feature])
+
+        stored_geometry = json.loads(cursor.batches[0][1][0][8])
+        self.assertEqual(stored_geometry, polygon)
+
+    def test_ward_geometry_collection_without_polygon_is_skipped(self):
+        spec = next(asset for asset in ASSETS if asset.key == "kenya_wards")
+        connection = FakeConnection()
+        connection.cursor = lambda: CursorContext(connection.cursor_instance)
+        feature = {
+            "id": "ward-line-only",
+            "geometry": {
+                "type": "GeometryCollection",
+                "geometries": [{"type": "LineString", "coordinates": [[36.0, -1.0], [37.0, -2.0]]}],
+            },
+            "properties": {"uid": "W001"},
+        }
+
+        with patch("oseas.ingest._persist_feature_page", return_value=1) as persist:
+            self.assertEqual(
+                _write_page(connection, "00000000-0000-4000-8000-000000000001", spec, "asset-id", [feature], 0, 1, 1),
+                (0, 1),
+            )
+
+        persist.assert_not_called()
 
     def test_page_progress_jsonb_keys_have_explicit_postgres_types(self):
         spec = next(asset for asset in ASSETS if asset.key == "kenya_counties")

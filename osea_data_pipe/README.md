@@ -13,7 +13,7 @@ OSEAS reads the supplied Kenya energy-infrastructure assets from Earth Engine, w
 - Read-only OSEAS API and readiness routes under `/api/v1/oseas`.
 - Prithvi results remain unvalidated for Kenya until compared with held-out local reference extents.
 
-The flood method is an unvalidated candidate screen, not confirmed inundation or a calibrated risk score. Climate, heat, wildfire, vulnerability, service reliability and resilience products remain unassessed until data and methods are implemented and validated.
+Flood candidates are screening evidence, not confirmed inundation or a calibrated risk score. Some climate, heat, fire and population evidence has been processed, but those products have limited periods/coverage and are not equivalent to a validated national risk assessment. Composite criticality, service-reliability and resilience scores are withheld when required operational evidence is missing.
 
 ## Setup
 
@@ -26,11 +26,15 @@ The flood method is an unvalidated candidate screen, not confirmed inundation or
 
 ## Documentation
 
+- [`docs/PIPELINE_AUDIT.md`](docs/PIPELINE_AUDIT.md): evidence-backed baseline, stage status, blockers and organizer indicator matrix.
+- [`docs/PIPELINE_CONTRACTS.md`](docs/PIPELINE_CONTRACTS.md): actual stage inputs, outputs, dependencies and acceptance gates.
 - [`docs/DATA_CATALOG.md`](docs/DATA_CATALOG.md): public sources, access, metadata and validation state.
+- [`docs/ASSESSMENT_METHODS.md`](docs/ASSESSMENT_METHODS.md): indicator methods, missing-data behavior and limitations.
 - [`docs/MODEL_CARD.md`](docs/MODEL_CARD.md): flood method and Prithvi status.
 - [`docs/API_CONTRACTS.md`](docs/API_CONTRACTS.md): stable read-only endpoints and GeoJSON format.
 - [`docs/INTEGRATION_READINESS.md`](docs/INTEGRATION_READINESS.md): evidence-based integration status.
 - [`docs/END_TO_END_RUNBOOK.md`](docs/END_TO_END_RUNBOOK.md): reproducible commands and troubleshooting.
+- [`docs/IMPLEMENTATION_STATUS.md`](docs/IMPLEMENTATION_STATUS.md): current implementation status and verified run evidence.
 
 ## Verification
 

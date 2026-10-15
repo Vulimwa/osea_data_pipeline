@@ -1,5 +1,18 @@
 # OSEAS assessment methods
 
+## Organizer indicator status
+
+The statuses below use the audit vocabulary `PASS`, `PARTIAL`, `BLOCKED`, `NOT_IMPLEMENTED`, and `FAIL`. A proxy or route does not promote an indicator to `PASS`.
+
+| Indicator | Status | Actual calculation/output | Data destination / API | Validation and known limitation |
+|---|---|---|---|---|
+| Flood Risk Exposure | `PARTIAL` | Sentinel-1 relative-backscatter threshold candidates and Sentinel-2 Prithvi water/flood candidates; positive geometry intersections are recorded as asset exposure. | `hazard_events`, `flood_extents`, `asset_hazard_exposure`, administrative summaries; `flood_candidate` and `asset_exposure` GeoJSON layers. | Localized pilot runs only; no Kenya-specific precision/recall/IoU or calibrated risk score. Candidate pixels are not confirmed inundation. |
+| Heat Stress Risk | `PARTIAL` | NASA POWER daily T2M_MAX, calendar-month baseline anomalies and configurable hot-day counts; nearest grid-cell asset screen. | `climate_observations`, heat events/exposure and summaries; climate/asset exposure layers. | Coarse (~50 km) near-surface air temperature, not Landsat LST or asset microclimate. No measured damage, outage or human-health outcome. |
+| Wildfire Exposure | `PARTIAL` | NASA FIRMS VIIRS active-fire points with acquisition metadata and optional point-to-asset distance. | `hazard_events`, `fire_events`, `asset_hazard_exposure`; `fire`/`asset_exposure` layers. | Active-fire proximity is not a perimeter, burned area or asset damage. A zero-detection query is not evidence of no fire. |
+| Infrastructure Criticality | `PARTIAL` | Evidence-gated records preserve asset attributes, verified relationships and missing inputs; the numeric score is withheld. | `asset_criticality_assessments`; asset criticality endpoint and layer. | No validated served-load, role, topology or redundancy inputs to support a national numeric score. |
+| Service Reliability Risk | `NOT_IMPLEMENTED` | No outage probability, failure forecast or reliability-risk score is calculated. Exposure/dependency evidence is not a reliability estimate. | No reliability-specific output contract; exposure and service-dependency endpoints expose only their own evidence. | Requires verified electrical topology and outage/failure/restoration history, with a validated model. |
+| Grid Resilience Scores | `PARTIAL` | Per-asset evidence dimensions include observed hazard exposure, verified alternative supply, topology, outage/restoration and service dependency; unknown dimensions stay unknown. | `grid_resilience_assessments`; `grid_resilience` GeoJSON layer. | Composite numeric score is withheld because redundancy, topology and operational history are not adequately supported. |
+
 ## Current executable methods
 
 ### Population exposure
@@ -38,7 +51,7 @@ Source-feature IDs and observed source identifiers are stable. Raster-based popu
 
 ## Explicitly outstanding
 
-The current implementation does not produce standalone CHIRPS/ERA5 rainfall anomaly indicators, reusable terrain/drainage/flow-accumulation products, Landsat LST composites, MODIS/Copernicus burned-area outputs, verified feeder topology, scientific criticality/vulnerability/resilience scores, or validated intervention benefits. Black Marble now uses the configured Earth Engine account and the 36-month interval in `.env`; its live national acquisition and persisted row count are reported in implementation status after the run. Kenya-specific precision/recall/IoU requires compatible reference labels and has not been performed.
+The current implementation has CHIRPS event-window rainfall totals and anomalies; standalone continuous rainfall/extreme-rainfall products and ERA5-derived indicators are outstanding. Reusable terrain/drainage/flow-accumulation products, Landsat LST composites, MODIS/Copernicus burned-area outputs, verified feeder topology, outage/reliability modelling, validated numeric criticality/vulnerability/resilience scores and intervention-benefit estimates are also outstanding. Black Marble has a configured resumable adapter, but this audit found no persisted `oseas_viirs_black_marble` run; see [`IMPLEMENTATION_STATUS.md`](IMPLEMENTATION_STATUS.md). Kenya-specific flood precision/recall/IoU requires compatible aligned reference labels and has not been performed.
 
 ## Status meanings
 

@@ -2,11 +2,22 @@
 
 Assessment date: 2026-10-15. This page separates code present in the repository from work verified against live Earth Engine and PostGIS services.
 
+## Post-interruption audit (2026-10-15)
+
+This update supersedes older statements below that described the latest ingestion as the 14-asset run or Black Marble as actively running.
+
+- `npm run oseas:status` found latest ingestion run `5c3d9c73-fb0a-41f6-8b35-c38ee4880021`, terminal status `partial`, for 17 configured assets. One asset failed and three had unusable geometries.
+- `kenya_wards` failed because a source `GeometryCollection` did not match the target `MultiPolygon` column. The importer fix now extracts polygonal members and is covered by unit tests, but no live rerun has verified it yet. The 1,274 prior ward rows remain and none was stamped by the failed run.
+- The latest run recorded 148 unusable source line features (1 at 132 kV, 139 at 33 kV, and 8 in the unidentified network dataset). They were skipped, not fabricated.
+- Inventory duplicate-source audit returned no duplicates; unique source constraints are installed for the canonical inventory tables.
+- No `oseas_viirs_black_marble` run exists in the database. The local progress log and monthly checkpoints show partial work only; saved lock-owner PIDs were not alive, and no matching acquisition process was running. Do not treat the local log as a live job or as persisted output.
+- The database, ingestion state, existing assessment records and model artifacts were not modified during this audit. The regression fix requires a new ingestion to update the ward source and then refresh assignments.
+
 ## Current state
 
 | Area | State | Evidence / remaining work |
 |---|---|---|
-| Infrastructure inventory ingestion | Completed with geometry warnings | Run `28645a80-fc57-4d32-bffe-b2e21d941e2d` read all 14 configured assets. Zero entire assets failed; 4 assets had 323 source features skipped for unusable geometry. The warnings and feature counts are persisted. |
+| Infrastructure inventory ingestion | Partial; latest run failed one source | Latest run `5c3d9c73-fb0a-41f6-8b35-c38ee4880021` processed 17 configured assets but failed the ward source on `GeometryCollection`/`MultiPolygon` mismatch. The code fix is unit-tested; a database rerun is still required. |
 | Duplicate prevention | Verified after ingestion | Deterministic source identifiers, upserts, and unique source constraints are active. `npm run oseas:status` reports zero duplicate source keys. |
 | Database schema | Ready; verified 2026-10-14 | `npm run db:setup` connected to PostGIS 3.3 and verified the core plus assessment/output tables. This is a read-only check. No database reset or drop was run. |
 | Historic energy/service Earth Engine ingestion | Completed with geometry warnings | The saved historic run read 14 infrastructure/service/boundary assets. Individual empty/missing geometries were skipped; source pages completed and deterministic upserts prevent duplicates. |
@@ -16,7 +27,7 @@ Assessment date: 2026-10-15. This page separates code present in the repository 
 | Prithvi | Nairobi/Kiambu inference completed and persisted; scientific validation not evaluated | Run `6860135c-5c64-4b9a-bfdb-b9f30a505b93` processed Sentinel-2 L1C scene `20240429T072621_20240429T074427_T37MEV` over a 1.48 km² Garissa pilot AOI. It produced five candidate polygons, zero asset intersections among 11 AOI assets, and four partial county/ward summaries. Output geometry passed PostGIS validity checks. No independent pixel reference was used. Nairobi/Kiambu run `49910391-e43b-4bf6-8cd9-fadc737ce709` completed with 3 candidate components unioned as one MultiPolygon, 99.58% clear AOI pixels, 4 partial administrative summaries and no assets inside the 4.92 km2 AOI. See [`PRITHVI_KENYA_VALIDATION.md`](PRITHVI_KENYA_VALIDATION.md). |
 | WorldPop population | Persisted with limitations | WorldPop Global2 R2025A v1, year 2024, was validated locally (9,596 × 11,726, EPSG:4326, SHA256 recorded). The idempotent processor persisted 374 event/county/ward exposure rows and associated coverage and quality records. Estimates are modeled residents in footprints, not observed disaster impacts or people served by energy assets. |
 | NASA POWER heat exposure | Persisted with limitations | 2024 T2M_MAX processing completed with 215,208 daily/climatology observations, 294 grid cells, 101,987 asset exposure rows and 1,261 ward/county summaries. The regional grid is coarse air-temperature context, not Landsat LST or measured outages. |
-| NASA VIIRS Black Marble | Earth Engine source configured; national batch running | VNP46A2 daily quality-screened composites, 36-month recent period, 2012-2015 comparison, resumable monthly checkpoints, persistent county/ward/asset/service outputs, and API map layer are configured. The active national run resumes verified monthly checkpoints and logs its current month and zone-batch progress at `outputs/logs/nightlights.stdout.log`. Database result rows and the processing run ID are recorded only after all requested months and zones finish. |
+| NASA VIIRS Black Marble | Blocked; incomplete local work only | The adapter and monthly checkpoint mechanism are implemented, but no `oseas_viirs_black_marble` database run was found. The last local log reported 2025-06, month 23/36 and 80,000/151,317 zones; checkpoints existed through 2025-05. The process and saved lock owners were not active at audit time. Verify the source manifest and resume after credentials are rotated. |
 | NASA FIRMS wildfire | Latest-day acquisition completed with limitations | Run `5f1ab0a9-c090-435a-899b-9c6df0e27a74` used `VIIRS_SNPP_NRT` over the Kenya county-boundary AOI for 2026-10-14. NASA returned zero detection points; the exact Kenya footprint, source hash and a `partially_assessed`/`not_validated` coverage record were persisted. Zero points do not establish absence of fire. Historical date windows are optional. |
 | Asset-to-ward/county assignments | Completed | The batched refresh processed 101,989 assets and persisted 193,390 current ward/county assignments; 101,939 assets matched at least one reporting unit. |
 | Evidence assessments | Completed with limitations | Run `edabcb94-a39c-4513-91de-851148d07df3` processed 101,989 assets, persisted 1,274 ward and 47 county summaries, and created 10,529 unranked field-verification candidates. Output row counts and uniqueness were verified in PostGIS. Numeric scores remain withheld where supporting evidence is absent. |

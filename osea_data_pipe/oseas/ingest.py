@@ -120,13 +120,40 @@ def _geometry(feature: dict[str, Any]) -> dict[str, Any] | None:
     return None
 
 
+def _geometry_for_target(feature: dict[str, Any], target: str) -> dict[str, Any] | None:
+    geometry = _geometry(feature)
+    if geometry is None or target not in {"county", "ward"} or geometry.get("type") != "GeometryCollection":
+        return geometry
+
+    polygons: list[list[Any]] = []
+
+    def collect_polygonal(candidate: dict[str, Any]) -> None:
+        geometry_type = candidate.get("type")
+        coordinates = candidate.get("coordinates")
+        if geometry_type == "Polygon" and coordinates:
+            polygons.append(coordinates)
+        elif geometry_type == "MultiPolygon" and coordinates:
+            polygons.extend(coordinates)
+        elif geometry_type == "GeometryCollection":
+            for child in candidate.get("geometries", []):
+                if isinstance(child, dict):
+                    collect_polygonal(child)
+
+    collect_polygonal(geometry)
+    if not polygons:
+        return None
+    if len(polygons) == 1:
+        return {"type": "Polygon", "coordinates": polygons[0]}
+    return {"type": "MultiPolygon", "coordinates": polygons}
+
+
 def _persist_feature_page(cur: Any, run_id: str, spec: Any, asset_id: str, features: list[dict[str, Any]]) -> int:
     """Prepare and write one bounded page using batched DB commands."""
     admin_rows, service_rows, asset_rows = [], [], []
     line_rows, substation_rows, transformer_rows, station_rows, mini_grid_rows = [], [], [], [], []
     hydrography_rows, flood_reference_rows = [], []
     for feature in features:
-        geometry = _geometry(feature)
+        geometry = _geometry_for_target(feature, spec.target)
         if not geometry:
             raise ValueError(f"Feature {_source_feature_id(feature) or '(no source ID)'} has no usable geometry")
         feature_id = _stable_id(spec.key, feature)
@@ -336,10 +363,14 @@ def _write_page(connection: Any, run_id: str, spec: Any, asset_id: str, features
     def persist() -> tuple[int, int]:
         try:
             with connection.cursor() as cur:
-                valid_features = [feature for feature in features if _geometry(feature)]
+                valid_features = [feature for feature in features if _geometry_for_target(feature, spec.target)]
                 skipped_count = len(features) - len(valid_features)
                 if skipped_count:
-                    invalid_ids = [_source_feature_id(feature) or "(no source ID)" for feature in features if not _geometry(feature)]
+                    invalid_ids = [
+                        _source_feature_id(feature) or "(no source ID)"
+                        for feature in features
+                        if not _geometry_for_target(feature, spec.target)
+                    ]
                     LOG.warning("Skipping %s source features without usable geometry for dataset=%s page=%s sample_ids=%s", skipped_count, spec.key, page_number, invalid_ids[:10])
                 page_count = _persist_feature_page(cur, run_id, spec, asset_id, valid_features) if valid_features else 0
                 cur.execute(

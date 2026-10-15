@@ -2,6 +2,36 @@
 
 Assessment date: 2026-10-15. Status reflects code and observed results; configured sources and runnable processors are not represented as persisted data.
 
+## Initial audit snapshot (before code changes)
+
+Overall baseline: `BLOCKED` for a complete, refreshed national assessment. Existing persisted results and the read-only API remain useful with limitations, but the latest source-ingestion run did not complete all configured inputs and there is no verified completed all-stage pipeline report.
+
+This snapshot was established read-only on 2026-10-15 using `npm run oseas:status`, database SELECTs, local process/lock inspection, and the checked-in code and tests. No ingestion, assessment, database migration, or output-writing command was run during the audit.
+
+| Pipeline stage | Baseline status | Evidence |
+|---|---|---|
+| Source registry | `PARTIAL` | `config/data_catalog.json` describes multiple Earth Engine, NASA, Copernicus, and WorldPop sources. Several are catalog-only or lack a complete acquisition-to-persistence workflow; a registry entry is not retrieval evidence. |
+| Core Earth Engine ingestion | `FAIL` | Latest database run `5c3d9c73-fb0a-41f6-8b35-c38ee4880021` ended `partial` at 2026-10-15 02:12:39 UTC, with 17 configured assets, one failed asset, and three assets with geometry skips. |
+| Ward boundary refresh | `FAIL` | `kenya_wards` failed with `Geometry type (GeometryCollection) does not match column type (MultiPolygon)`. A read-only count found 1,274 existing ward rows and zero rows stamped with the latest run ID; prior rows were not deleted. |
+| Geometry skips | `PARTIAL` | The latest run recorded 148 skipped features: `transmission_lines_132kv` (1), `transmission_lines_33kv` (139), and `unidentified_grid_network` (8). These were counted, but the source features still require review. |
+| Duplicate prevention | `PASS` for checked inventory keys | `npm run oseas:status` returned no duplicate source keys and found unique source-key constraints on assets, services, and administrative units. No claim is made about unrelated assessment IDs. |
+| Hazard and contextual products | `PARTIAL` | Existing run evidence is documented for bounded flood candidates, POWER heat, CHIRPS event rainfall, FIRMS detections, and WorldPop exposure. These have limited spatial/temporal scope and scientific validation gaps; they are not a complete national hazard suite. |
+| Black Marble nighttime lights | `BLOCKED` pending a safe resume | No `oseas_viirs_black_marble` run rows were found. The last local log shows 2025-06 at month 23/36 and 80,000/151,317 zones; checkpoint files are present only through 2025-05. The VIIRS lock PID (15068) and orchestrator lock PID (5488) were not alive, and no matching local processing process was found. The lock files were left untouched. |
+| Evidence assessments and reporting | `PARTIAL` | Prior national output counts and withheld-score behavior are documented below, but a fresh all-stage run was not verified in this audit. Ward coverage remains stale relative to the latest failed ingestion. |
+| API and frontend integration | `PARTIAL` | Read-only routes and API contracts exist. The API routes are implemented, but this audit did not verify a live frontend workflow against all layers; frontend integration remains deferred. |
+| End-to-end orchestration | `FAIL` | No `outputs/last_pipeline_run.json` exists. A single, current all-stage run with complete outputs has not been verified. |
+
+The ingestion importer commits bounded pages and upserts by source key, so already committed records remain available after a later page/source failure. This is safe for reruns, but means a failed source can leave a mixture of previously stored and newly refreshed rows; consumers must use run provenance and source-level status rather than treating the inventory as a single atomic snapshot.
+
+The baseline gap requiring the first fix is the ward `GeometryCollection` mismatch. The next operational gate is to verify the geometry normalization on tests, then have an operator rerun ingestion after confirming no competing writer is active. No live ingestion was started by this audit.
+
+## Changes made after the baseline
+
+- Updated `oseas/ingest.py` to extract polygon and multipolygon members from a ward/county `GeometryCollection` before writing to the canonical `MultiPolygon` column. Geometry collections without polygonal members now follow the existing skipped-geometry accounting path. Rivers and lakes retain their source geometry-collection behavior.
+- Added two regression tests for polygon extraction and non-polygon collection skips. The focused `test_oseas_ingest.py` suite passes (12 tests).
+- The live database was not modified or rerun. The latest run remains `partial`; the 1,274 existing ward records still have zero rows stamped by that run. A rerun is required to verify refreshed ward persistence.
+- The 148 unusable line-feature geometries remain source data gaps. They are still explicitly counted and skipped; no source feature has been fabricated or replaced.
+
 | Deliverable | Status | Evidence and remaining limitation |
 |---|---|---|
 | 59 Standardized energy inventory | READY_WITH_LIMITATIONS | Earth Engine ingestion, normalization, deterministic source keys, PostGIS upserts and county/ward assignment exist. Historic run recorded rejected geometries; configured data is not proof of national completeness. |
@@ -9,7 +39,7 @@ Assessment date: 2026-10-15. Status reflects code and observed results; configur
 | 61 Rainfall indicators | READY_WITH_LIMITATIONS | CHIRPS run `fdc303fc-7f11-4353-9e30-e8c262205ddc` persisted 7,878 deterministic observations across 1,313 county/ward units for 2 dated flood events: 30-day totals, absolute anomalies and percentage anomalies where the baseline is positive. Quality checks, source version and run provenance are present. Query `/api/v1/oseas/layers/rainfall/geojson`. Extreme-rainfall thresholds and independent Kenya validation remain outstanding. |
 | 62 Terrain/drainage | READY_WITH_LIMITATIONS | DEM slope is used by Sentinel-1 screening. A reusable terrain/drainage product, flow accumulation and asset association have not been executed. |
 | 63 Heat exposure | READY_WITH_LIMITATIONS | NASA POWER daily T2M_MAX, provider monthly-climatology anomalies, hot-day screens, grid-cell events, source versions and nearest-cell asset screening completed for 2024. Live run `e65d4f92-39a4-4b7e-aae3-49c7cbd05440` has 215,208 daily/climatology observations, 294 grid cells, 101,987 asset exposure rows and 1,261 ward/county summaries. Coarse (~0.5-degree) air temperature is not Landsat LST; this is hazard exposure context, not asset damage or outage evidence. |
-| First-class night-lights context | IN_PROGRESS | NASA VIIRS Black Marble VNP46A2 is quality-screened and summarized by month for 151,317 admin, asset and service zones. The 84-month job uses 2023-08 through 2026-07 against 2012-01 through 2015-12; January 2012 is partial. The active job resumes verified monthly checkpoints; its current month and zone-batch progress are logged at `outputs/logs/nightlights.stdout.log`. Output rows are committed after the complete set of monthly summaries; no persisted night-lights rows are claimed yet. |
+| First-class night-lights context | PARTIAL | NASA VIIRS Black Marble VNP46A2 has a quality-screened, resumable adapter for monthly summaries. No `oseas_viirs_black_marble` run rows were found. At audit time, the last log showed 2025-06 at month 23/36 and 80,000/151,317 zones; local checkpoints existed through 2025-05. The recorded local lock owners were not alive, so the job was not considered active. A source-manifest-verified complete interval and persisted database output are still required. |
 | 64 Wildfire | READY_WITH_LIMITATIONS | FIRMS run `5f1ab0a9-c090-435a-899b-9c6df0e27a74` successfully queried latest-day `VIIRS_SNPP_NRT`, persisted valid Kenya coverage/provenance, and returned zero active detections for 2026-10-14. Zero returned detections is not evidence of no fire. The adapter does not produce fire perimeters, burned area or damage claims. |
 | 65 Asset hazard exposure | READY_WITH_LIMITATIONS | Existing flood exposure and new heat/fire proximity routines persist asset-linked measurements. Complete source-wide coverage, line-specific denominator handling across hazards and persisted end-to-end verification remain outstanding. |
 | 66 Infrastructure criticality | READY_WITH_LIMITATIONS | Engine emits verified service context and missing-evidence explanations. Numeric score is withheld without calibrated normalization, network topology, served load and redundancy evidence. |
