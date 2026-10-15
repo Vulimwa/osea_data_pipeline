@@ -1,0 +1,15 @@
+{
+  "version": 2,
+  "buildCommand": "npm run build:ui",
+  "outputDirectory": "dist-frontend",
+  "rewrites": [
+    {
+      "source": "/api/:path*",
+      "destination": "https://osea-data-pipeline.onrender.com/api/:path*"
+    },
+    {
+      "source": "/(.*)",
+      "destination": "/index.html"
+    }
+  ]
+}

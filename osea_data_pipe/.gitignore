@@ -5,6 +5,7 @@ venv/
 env/
 build/
 dist/
+dist-frontend/
 coverage/
 .turbo/
 .cache/
