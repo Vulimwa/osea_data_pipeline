@@ -1,11 +1,13 @@
+import os
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 from scripts.run_prithvi_flood import _configure_proj_data, _polygonize, _validate_and_mask_prediction, validate_args
 from argparse import Namespace
 from shapely.geometry import box
-from scripts.run_prithvi_national import _ensure_grid, _finalize, _zonal_pixel_stats, tile_dimensions
+from scripts.run_prithvi_national import _earth_engine_roi, _ensure_grid, _finalize, _zonal_pixel_stats, run, tile_dimensions
 
 _configure_proj_data()
 import numpy as np
@@ -30,6 +32,49 @@ class PrithviFloodPipelineTests(unittest.TestCase):
         grid_query, grid_params = cursor.calls[0]
         self.assertEqual(grid_query.count("%s"), len(grid_params))
         self.assertIn("ON CONFLICT (event_fingerprint,batch_id) DO NOTHING", grid_query)
+
+    def test_national_tile_roi_is_transformed_to_wgs84_before_earth_engine(self):
+        class Geometry:
+            @staticmethod
+            def Rectangle(coordinates, **kwargs):
+                return {"coordinates": coordinates, "options": kwargs}
+
+        EarthEngine = type("EarthEngine", (), {"Geometry": Geometry})
+
+        roi = _earth_engine_roi(EarthEngine, (3_700_000, -600_000, 3_705_120, -594_880))
+        west, south, east, north = roi["coordinates"]
+        self.assertLess(west, east)
+        self.assertLess(south, north)
+        self.assertTrue(-180 <= west <= 180 and -180 <= east <= 180)
+        self.assertTrue(-90 <= south <= 90 and -90 <= north <= 90)
+        self.assertEqual(roi["options"], {"geodesic": False})
+
+    def test_national_run_configures_proj_before_tile_transform(self):
+        class Geometry:
+            @staticmethod
+            def Rectangle(coordinates, **kwargs):
+                return coordinates
+
+        EarthEngine = type("EarthEngine", (), {"Geometry": Geometry})
+        with patch.dict(
+            os.environ,
+            {
+                "GEE_PROJECT_ID": "",
+                "PROJ_LIB": str(Path.cwd() / "missing-proj-data"),
+            },
+        ):
+            with patch("scripts.run_prithvi_national.validate_args"), patch(
+                "oseas.config.database_url", return_value=None
+            ):
+                with self.assertRaisesRegex(RuntimeError, "DB_URL"):
+                    run(Namespace())
+            self.assertTrue((Path(os.environ["PROJ_LIB"]) / "proj.db").is_file())
+            roi = _earth_engine_roi(EarthEngine, (3_700_000, -600_000, 3_705_120, -594_880))
+        west, south, east, north = roi
+        self.assertLess(west, east)
+        self.assertLess(south, north)
+        self.assertTrue(-180 <= west <= 180 and -180 <= east <= 180)
+        self.assertTrue(-90 <= south <= 90 and -90 <= north <= 90)
 
     def test_national_finalization_sql_binds_every_parameter(self):
         class Cursor:

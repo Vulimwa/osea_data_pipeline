@@ -1,22 +1,37 @@
 @import 'tailwindcss';
-@import '@arcgis/core/assets/esri/themes/dark/main.css';
 
 :root {
-  /* Charcoal + flood amber only — no teal “eco” cast */
+  --ink: #f4f5f6;
+  --ink-2: #eceff1;
+  --paper: #ffffff;
+  --mist: #202327;
+  --mist-dim: rgba(32, 35, 39, 0.68);
+  --flood: #e06b2d;
+  --flood-soft: #f0a46a;
+  --ok: #617b48;
+  --unknown: #7a7f88;
+  --line: rgba(32, 35, 39, 0.14);
+  --line-strong: rgba(32, 35, 39, 0.24);
+  --map-panel: rgba(255, 255, 255, 0.94);
+  --map-panel-strong: rgba(255, 255, 255, 0.98);
+  --subtle-surface: rgba(32, 35, 39, 0.035);
+  font-family: var(--calcite-sans-family, "Avenir Next", "Helvetica Neue", sans-serif);
+  color: var(--mist);
+  background: var(--ink);
+}
+
+:root[data-theme='dark'] {
   --ink: #0b0c0e;
   --ink-2: #14161a;
   --paper: #16181d;
   --mist: #ece8e2;
   --mist-dim: rgba(236, 232, 226, 0.58);
-  --flood: #e06b2d;
-  --flood-soft: #f0a46a;
   --ok: #c4b5a0;
-  --unknown: #7a7f88;
   --line: rgba(236, 232, 226, 0.12);
   --line-strong: rgba(236, 232, 226, 0.22);
-  font-family: 'Outfit', system-ui, sans-serif;
-  color: var(--mist);
-  background: var(--ink);
+  --map-panel: rgba(11, 12, 14, 0.94);
+  --map-panel-strong: rgba(11, 12, 14, 0.98);
+  --subtle-surface: rgba(255, 255, 255, 0.025);
 }
 
 * {
@@ -45,8 +60,8 @@ h3,
 calcite-shell {
   --calcite-color-brand: #e06b2d;
   --calcite-color-brand-hover: #f0a46a;
-  --calcite-color-background: #0b0c0e;
-  --calcite-color-foreground-1: #14161a;
+  --calcite-color-background: var(--paper);
+  --calcite-color-foreground-1: var(--ink-2);
   height: 100%;
 }
 
@@ -315,6 +330,339 @@ calcite-shell {
   --esri-view-outline-color: transparent;
 }
 
+.risk-map-page {
+  position: relative;
+  height: calc(100vh - 64px);
+  min-height: 540px;
+  overflow: hidden;
+  background: var(--ink-2);
+}
+
+.risk-map-canvas {
+  position: absolute;
+  inset: 0;
+}
+
+.risk-map-header {
+  position: absolute;
+  z-index: 6;
+  top: 0.75rem;
+  left: 340px;
+  right: 0.85rem;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem;
+  min-height: 3rem;
+  padding: 0.45rem 0.55rem 0.45rem 0.8rem;
+  border: 1px solid var(--line);
+  border-radius: 4px;
+  background: var(--map-panel);
+  backdrop-filter: blur(12px);
+}
+
+.risk-map-header.sidebar-collapsed {
+  left: 0.75rem;
+}
+
+.map-heading,
+.map-header-tools {
+  display: flex;
+  align-items: center;
+  gap: 0.65rem;
+}
+
+.map-heading > span {
+  font-size: 0.9rem;
+  font-weight: 600;
+}
+
+.map-header-tools calcite-select {
+  width: 220px;
+}
+
+.map-header-tools calcite-select[label='Basemap'] {
+  width: 150px;
+}
+
+.risk-map-sidebar {
+  position: absolute;
+  z-index: 7;
+  top: 0.75rem;
+  bottom: 0.75rem;
+  left: 0.75rem;
+  width: 320px;
+  max-width: calc(100vw - 1.5rem);
+}
+
+.risk-panel {
+  height: 100%;
+  --calcite-panel-background-color: var(--map-panel-strong);
+}
+
+.risk-panel-body {
+  display: grid;
+  gap: 0.4rem;
+  max-height: calc(100vh - 130px);
+  overflow-y: auto;
+  padding: 0.6rem;
+}
+
+.risk-intro {
+  display: grid;
+  gap: 0.5rem;
+  padding: 0.25rem 0.4rem 0.5rem;
+}
+
+.risk-intro p,
+.briefing-panel-copy,
+.evidence-caveat {
+  color: var(--mist-dim);
+  font-size: 0.82rem;
+  line-height: 1.5;
+}
+
+.risk-intro p {
+  margin: 0;
+}
+
+.risk-metrics {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 0.4rem;
+}
+
+.risk-metrics calcite-block {
+  min-width: 0;
+  border: 1px solid var(--line);
+  border-radius: 3px;
+  background: var(--subtle-surface);
+}
+
+.risk-metrics calcite-block strong,
+.risk-metrics calcite-block span {
+  display: block;
+}
+
+.risk-metrics calcite-block strong {
+  font-size: 1.2rem;
+  font-variant-numeric: tabular-nums;
+}
+
+.risk-metrics calcite-block span {
+  color: var(--mist-dim);
+  font-size: 0.72rem;
+}
+
+.layer-groups {
+  display: grid;
+  gap: 0.8rem;
+}
+
+.layer-group h3 {
+  margin: 0.4rem 0 0.3rem;
+  color: var(--mist-dim);
+  font-family: var(--calcite-sans-family, "Avenir Next", "Helvetica Neue", sans-serif);
+  font-size: 0.68rem;
+  font-weight: 600;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.layer-toggle {
+  display: flex !important;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.4rem;
+  min-height: 2.5rem;
+  margin: 0;
+  border-bottom: 1px solid var(--line);
+}
+
+.layer-label {
+  display: grid;
+  gap: 0.14rem;
+  min-width: 0;
+}
+
+.layer-label > span {
+  font-size: 0.82rem;
+}
+
+.layer-label small {
+  color: var(--mist-dim);
+  font-size: 0.68rem;
+}
+
+.signal-list {
+  display: grid;
+  gap: 0;
+}
+
+.signal-list > div,
+.spatial-result {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.5rem;
+  padding: 0.4rem 0;
+  border-bottom: 1px solid var(--line);
+  font-size: 0.78rem;
+}
+
+.signal-list > div span {
+  color: var(--mist-dim);
+}
+
+.signal-list > div strong,
+.spatial-result strong {
+  font-weight: 600;
+  text-align: right;
+  text-transform: capitalize;
+}
+
+.evidence-caveat {
+  margin: 0.55rem 0 0;
+  font-size: 0.75rem;
+}
+
+.spatial-results {
+  display: grid;
+  gap: 0.45rem;
+  margin-top: 0.5rem;
+}
+
+.map-search-tools {
+  position: absolute;
+  z-index: 6;
+  top: 4.35rem;
+  right: 0.85rem;
+  width: min(300px, calc(100vw - 2rem));
+}
+
+.map-search-results {
+  max-height: 320px;
+  margin-top: 0.3rem;
+  overflow: auto;
+  border: 1px solid var(--line);
+  border-radius: 3px;
+  background: var(--map-panel-strong);
+}
+
+.map-attribution-note {
+  position: absolute;
+  z-index: 5;
+  right: 0.85rem;
+  bottom: 0.85rem;
+  pointer-events: none;
+}
+
+.briefing {
+  display: grid;
+  gap: 1.1rem;
+  max-width: 1024px;
+  padding-top: 2rem;
+}
+
+.briefing h1 {
+  max-width: 25ch;
+  font-size: clamp(2rem, 5vw, 3.25rem);
+  line-height: 1.08;
+}
+
+.briefing .lede {
+  max-width: 68ch;
+  font-size: 1rem;
+}
+
+.briefing-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 0.75rem;
+}
+
+.briefing-grid calcite-panel,
+.briefing-status-panel {
+  border: 1px solid var(--line);
+}
+
+.briefing-panel-copy {
+  margin: 0;
+  padding: 0.8rem;
+}
+
+.briefing-status-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+  gap: 0.75rem;
+  padding: 0.8rem;
+}
+
+.briefing-status-grid > div {
+  display: grid;
+  gap: 0.25rem;
+}
+
+.briefing-status-grid span {
+  color: var(--mist-dim);
+  font-size: 0.75rem;
+}
+
+.briefing-status-grid strong {
+  font-size: 0.95rem;
+  text-transform: capitalize;
+}
+
+.oseas-feature-popup {
+  display: grid;
+  gap: 0.65rem;
+  min-width: 190px;
+  max-width: 300px;
+  padding: 0.1rem 0.05rem 0.25rem;
+}
+
+.oseas-feature-popup calcite-chip {
+  width: fit-content;
+  max-width: 100%;
+}
+
+.oseas-popup-facts {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 0.4rem;
+}
+
+.oseas-popup-fact {
+  display: grid;
+  gap: 0.2rem;
+  min-width: 0;
+  padding: 0.5rem;
+  border: 1px solid var(--calcite-color-border-3, rgba(32, 35, 39, 0.14));
+  border-radius: 4px;
+  background: var(--calcite-color-foreground-1, rgba(32, 35, 39, 0.035));
+}
+
+.oseas-popup-fact span {
+  color: var(--calcite-color-text-2, #626a73);
+  font-size: 0.65rem;
+  text-transform: capitalize;
+}
+
+.oseas-popup-fact strong {
+  overflow-wrap: anywhere;
+  color: var(--calcite-color-text-1, #202327);
+  font-size: 0.78rem;
+  font-weight: 600;
+  text-transform: capitalize;
+}
+
+.oseas-popup-empty {
+  margin: 0;
+  color: var(--calcite-color-text-2, #626a73);
+  font-size: 0.78rem;
+  line-height: 1.5;
+}
+
 @media (max-width: 720px) {
   .brief-list li {
     grid-template-columns: 1fr;
@@ -326,5 +674,60 @@ calcite-shell {
     left: 0.5rem;
     right: 0.5rem;
     width: auto;
+  }
+
+  .risk-map-page {
+    height: calc(100vh - 58px);
+  }
+
+  .risk-map-header {
+    top: 0.4rem;
+    left: 0.4rem;
+    right: 0.4rem;
+    align-items: flex-start;
+    flex-direction: column;
+  }
+
+  .risk-map-header.sidebar-collapsed {
+    left: 0.4rem;
+  }
+
+  .map-header-tools {
+    width: 100%;
+    flex-wrap: wrap;
+  }
+
+  .map-header-tools calcite-select {
+    width: min(100%, 240px);
+  }
+
+  .risk-map-sidebar {
+    top: 7.3rem;
+    bottom: 0.5rem;
+    left: 0.4rem;
+    width: min(340px, calc(100vw - 0.8rem));
+  }
+
+  .risk-panel-body {
+    max-height: calc(100vh - 215px);
+  }
+
+  .map-search-tools {
+    top: 7.7rem;
+    right: 0.65rem;
+    width: min(240px, calc(100vw - 2rem));
+  }
+
+  .map-heading > span {
+    font-size: 0.78rem;
+  }
+
+  .briefing-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .map-attribution-note {
+    right: 0.5rem;
+    bottom: 0.5rem;
   }
 }

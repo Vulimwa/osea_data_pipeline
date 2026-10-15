@@ -1,12 +1,14 @@
-import { useNavigate, useParams } from 'react-router-dom';
+import { useLocation, useNavigate, useParams } from 'react-router-dom';
 import { useQuery } from '@tanstack/react-query';
 import { cn } from '../lib/cn';
 import {
   PILOT_DATASET,
   fetchAssetCriticality,
   fetchAssetExposure,
+  fetchAssetServiceDependencies,
   fetchAssetVulnerability,
   fetchPilotAssets,
+  type AssetFeature,
 } from '../lib/api';
 
 function toneClass(label: string | null | undefined): string {
@@ -21,39 +23,50 @@ function toneClass(label: string | null | undefined): string {
 export function EvidencePage() {
   const { assetId } = useParams();
   const navigate = useNavigate();
+  const location = useLocation();
+  const routedAsset = (location.state as { asset?: AssetFeature } | null)?.asset ?? null;
 
   const pilotQ = useQuery({
     queryKey: ['assets-pilot'],
     queryFn: fetchPilotAssets,
+    enabled: Boolean(assetId && !routedAsset),
     retry: 1,
   });
 
-  const asset = (pilotQ.data ?? []).find((a) => a.id === assetId) ?? null;
+  const asset = routedAsset ?? (pilotQ.data ?? []).find((a) => a.id === assetId) ?? null;
 
   const detailQ = useQuery({
     queryKey: ['asset-detail', assetId],
     enabled: Boolean(assetId),
     queryFn: async () => {
       const id = assetId as string;
-      const [exposure, vulnerability, criticality] = await Promise.all([
+      const [exposure, vulnerability, criticality, dependencies] = await Promise.all([
         fetchAssetExposure(id),
         fetchAssetVulnerability(id),
-        fetchAssetCriticality(id).catch(() => ({
-          assetId: id,
-          status: 'not_assessed',
-          data: [],
-        })),
+        fetchAssetCriticality(id),
+        fetchAssetServiceDependencies(id),
       ]);
-      return { exposure, vulnerability, criticality };
+      return { exposure, vulnerability, criticality, dependencies };
     },
   });
+
+  if (!assetId || (!asset && pilotQ.isLoading)) {
+    return (
+      <div className="asset-page page">
+        <calcite-loader label="Loading asset record" />
+      </div>
+    );
+  }
 
   if (!assetId || !asset) {
     return (
       <div className="asset-page page">
         <p className="kicker">Evidence</p>
         <h1>No asset selected</h1>
-        <p className="meta">Open the map, pick a pilot asset, then view evidence.</p>
+        <p className="meta">
+          Open an asset from the map to review its record and evidence. Direct links are currently
+          supported for the Kano pilot inventory.
+        </p>
         <div className="cta-row">
           <calcite-button kind="brand" onClick={() => navigate('/map')}>
             Open map
@@ -66,6 +79,7 @@ export function EvidencePage() {
   const exposure = detailQ.data?.exposure.data ?? null;
   const vulnerability = detailQ.data?.vulnerability.data?.[0] ?? null;
   const criticality = detailQ.data?.criticality.data?.[0] ?? null;
+  const dependency = detailQ.data?.dependencies.data?.[0] ?? null;
   const flood = exposure?.find((row) => row.hazard_type === 'flood');
   const heat = exposure?.find((row) => row.hazard_type === 'heat');
   const wildfire = exposure?.find((row) => row.hazard_type === 'wildfire');
@@ -97,6 +111,14 @@ export function EvidencePage() {
         <div className="mt-8">
           <calcite-loader label="Loading evidence" />
         </div>
+      )}
+      {detailQ.error && (
+        <calcite-notice open kind="danger" icon>
+          <div slot="title">Evidence request failed</div>
+          <div slot="message">
+            {detailQ.error instanceof Error ? detailQ.error.message : 'The API returned an error.'}
+          </div>
+        </calcite-notice>
       )}
 
       <div className="metrics">
@@ -169,7 +191,27 @@ export function EvidencePage() {
             {wildfire?.exposure_status || 'not assessed'}
           </div>
         </div>
+
+        <div className="metric">
+          <label>Service dependency</label>
+          <div className={cn('value', toneClass(String(dependency?.status ?? 'not_assessed')))}>
+            {String(dependency?.status ?? 'not assessed')}
+          </div>
+          <p className="note">
+            {dependency?.service_type
+              ? `Linked service: ${String(dependency.service_type)}`
+              : 'No verified service dependency recorded'}
+          </p>
+        </div>
       </div>
+
+      <calcite-notice open kind="warning" icon>
+        <div slot="title">Interpretation guardrail</div>
+        <div slot="message">
+          Exposure is not damage, outages, or service loss. Scores are shown only when persisted
+          with provenance; not assessed and withheld are distinct from zero.
+        </div>
+      </calcite-notice>
     </div>
   );
 }

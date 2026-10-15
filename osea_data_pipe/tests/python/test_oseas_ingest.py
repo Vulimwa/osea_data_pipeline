@@ -4,7 +4,8 @@ from types import SimpleNamespace
 from unittest.mock import patch
 
 from oseas.config import ASSETS, configured_assets, database_url, missing_asset_keys
-from oseas.ingest import _acquire_run_lock, _fail_abandoned_runs, _geometry, _get_features, _next_page_token, _persist_feature_page, _source_feature_id, _stable_id, _write_page, inspect_asset
+from oseas.ingest import _acquire_run_lock, _complete_persisted_feature_count, _fail_abandoned_runs, _geometry, _get_features, _next_page_token, _persisted_feature_count, _persist_feature_page, _source_feature_id, _stable_id, _write_page, inspect_asset
+from scripts.run_oseas_pipeline import validate_inventory_result
 
 
 class RecordingCursor:
@@ -46,6 +47,23 @@ class CursorContext:
 
     def __exit__(self, *_args):
         return False
+
+
+class CachedDatasetCursor:
+    def __init__(self, version, persisted_count):
+        self.version = version
+        self.persisted_count = persisted_count
+        self.last_query = ""
+        self.calls = []
+
+    def execute(self, query, params=None):
+        self.last_query = query
+        self.calls.append((query, params))
+
+    def fetchone(self):
+        if "SELECT dv.feature_count" in self.last_query:
+            return self.version
+        return (self.persisted_count,)
 
 
 class FakeEarthEngine:
@@ -108,6 +126,50 @@ class OseasIngestTests(unittest.TestCase):
         self.assertEqual(cursor.batches[0][1][0][4], "123")
         self.assertIn('"County2": "Example"', cursor.batches[0][1][0][7])
         self.assertEqual(len(cursor.statements), 1)  # dataset freshness is updated once per page
+
+    def test_complete_persisted_source_is_reused_only_when_version_and_rows_match(self):
+        spec = next(asset for asset in ASSETS if asset.key == "distribution_transformers")
+
+        def check(version, row_count):
+            cursor = CachedDatasetCursor(version, row_count)
+            connection = FakeConnection()
+            connection.cursor = lambda: CursorContext(cursor)
+            return _complete_persisted_feature_count(connection, spec, "asset/path")
+
+        metadata = {"source_feature_count": 2, "skipped_geometry_count": 0}
+        self.assertEqual(check((2, metadata), 2), 2)
+        self.assertIsNone(check((2, metadata), 1))
+        self.assertIsNone(check((2, {"source_feature_count": 3, "skipped_geometry_count": 0}), 2))
+        self.assertIsNone(check((2, {"source_feature_count": 2, "skipped_geometry_count": 1}), 2))
+        self.assertIsNone(check(None, 2))
+
+    def test_persisted_feature_count_uses_the_table_for_each_source_target(self):
+        expected_tables = {
+            "distribution_transformers": "energy_assets",
+            "healthcare_facilities": "critical_services",
+            "kenya_counties": "administrative_units",
+            "kenya_rivers": "hydrography_features",
+            "kenya_flood_2023_reference": "flood_reference_features",
+        }
+        for key, expected_table in expected_tables.items():
+            with self.subTest(dataset=key):
+                spec = next(asset for asset in ASSETS if asset.key == key)
+                cursor = RecordingCursor()
+                self.assertEqual(_persisted_feature_count(cursor, spec), 1)
+                self.assertIn(f"FROM {expected_table}", cursor.statements[-1][0])
+
+    def test_pipeline_accepts_reused_county_and_ward_inventory(self):
+        metadata = {
+            "failed_assets": 0,
+            "assets": [
+                {"dataset_key": "kenya_counties", "status": "reused", "features_reused": 47, "features_skipped_geometry": 0},
+                {"dataset_key": "kenya_wards", "status": "reused", "features_reused": 1450, "features_skipped_geometry": 0},
+            ],
+        }
+        self.assertEqual(validate_inventory_result("completed", metadata), (
+            True,
+            "latest run has persisted or verified reusable county and ward boundaries and no failed source assets",
+        ))
 
     def test_ward_geometry_collection_keeps_polygonal_components_only(self):
         spec = next(asset for asset in ASSETS if asset.key == "kenya_wards")

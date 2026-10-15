@@ -9,8 +9,9 @@ export default function App() {
     <BrowserRouter>
       <Routes>
         <Route element={<AppLayout />}>
-          <Route index element={<OverviewPage />} />
+          <Route index element={<MapPage />} />
           <Route path="map" element={<MapPage />} />
+          <Route path="briefing" element={<OverviewPage />} />
           <Route path="evidence" element={<EvidencePage />} />
           <Route path="evidence/:assetId" element={<EvidencePage />} />
           <Route path="*" element={<Navigate to="/" replace />} />

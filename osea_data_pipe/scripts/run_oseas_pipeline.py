@@ -177,7 +177,7 @@ def validate_ntl_result(status: str, metadata: dict[str, object], stored_rows: i
 
 
 def validate_inventory_result(status: str, metadata: dict[str, object]) -> tuple[bool, str]:
-    """Require current county and ward source rows before refreshing dependent outputs."""
+    """Require persisted or verified reusable county and ward rows before dependent outputs."""
     if status not in {"completed", "partial"}:
         return False, f"latest inventory run is {status!r}, not usable"
     try:
@@ -199,10 +199,11 @@ def validate_inventory_result(status: str, metadata: dict[str, object]) -> tuple
         asset = by_key.get(key)
         if asset is None:
             return False, f"latest inventory run did not include required boundary source {key}"
-        if asset.get("status") not in {"completed", "partial"}:
+        if asset.get("status") not in {"completed", "partial", "reused"}:
             return False, f"required boundary source {key} ended with status {asset.get('status')!r}"
+        count_key = "features_reused" if asset.get("status") == "reused" else "features_persisted"
         try:
-            persisted = int(asset.get("features_persisted", 0))
+            persisted = int(asset.get(count_key, 0))
         except (TypeError, ValueError):
             return False, f"required boundary source {key} has invalid persisted-feature metadata"
         if persisted <= 0:
@@ -213,7 +214,7 @@ def validate_inventory_result(status: str, metadata: dict[str, object]) -> tuple
             return False, f"required boundary source {key} has invalid skipped-geometry metadata"
         if skipped:
             return False, f"required boundary source {key} skipped {skipped} feature(s) with unusable geometry"
-    return True, "latest run has persisted county and ward boundaries and no failed source assets"
+    return True, "latest run has persisted or verified reusable county and ward boundaries and no failed source assets"
 
 
 def verify_latest_inventory(not_before: datetime | None = None) -> tuple[bool, str]:
@@ -389,7 +390,7 @@ def build_report(
             "standalone ERA5 outputs and reusable national DEM-derived drainage metrics",
             "validated Kenya-specific Prithvi metrics and verified feeder/outage records",
         ],
-        "duplication_policy": "Stable source keys, deterministic assessment IDs, source-content fingerprints and source-specific locks; same-input outputs are upserted or resumed.",
+        "duplication_policy": "Stable source keys, verified per-source inventory reuse, deterministic assessment IDs, source-content fingerprints and source-specific locks; same-input outputs are upserted or resumed.",
         "database_write_policy": "Existing source and assessment rows are preserved; writers use stable-key upserts or append-only run provenance.",
         "map_output_policy": "Persisted products are served from PostGIS through the read-only OSEAS API under /api/v1/oseas; blocked stages do not imply an empty or complete map layer.",
         "image_downloads_enabled": image_downloads_enabled,
@@ -408,7 +409,9 @@ def write_report(report: dict[str, object]) -> None:
 
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--skip-earth-engine", action="store_true", help="Use already-ingested source features")
+    inventory_mode = parser.add_mutually_exclusive_group()
+    inventory_mode.add_argument("--skip-earth-engine", action="store_true", help="Use already-ingested source features without checking or refreshing configured vector datasets")
+    inventory_mode.add_argument("--refresh-inventory", action="store_true", help="Force Earth Engine source-feature ingestion even when complete persisted versions are available")
     parser.add_argument("--skip-worldpop-download", action="store_true", help="Require the selected WorldPop raster to exist locally")
     parser.add_argument("--active-ntl-timeout-minutes", type=int,
                         default=int(os.getenv("OSEAS_PIPELINE_ACTIVE_NTL_TIMEOUT_MINUTES", "1440")),
@@ -416,6 +419,9 @@ def main() -> int:
     args = parser.parse_args()
     if args.active_ntl_timeout_minutes < 0:
         parser.error("--active-ntl-timeout-minutes must be zero or greater")
+    skip_earth_engine = args.skip_earth_engine or os.getenv("OSEAS_PIPELINE_SKIP_EE", "").lower() in {"1", "true", "yes"}
+    if skip_earth_engine and args.refresh_inventory:
+        parser.error("--refresh-inventory cannot be combined with --skip-earth-engine or OSEAS_PIPELINE_SKIP_EE")
     stages: list[dict[str, object]] = []
     pipeline_started_at = datetime.now(timezone.utc).isoformat()
     acquire_lock()
@@ -454,14 +460,17 @@ def main() -> int:
             stages.append({"stage": "Prithvi model smoke validation", "status": "blocked",
                            "reason": "pinned checkpoint acquisition failed"})
 
-        if args.skip_earth_engine or os.getenv("OSEAS_PIPELINE_SKIP_EE", "").lower() in {"1", "true", "yes"}:
+        if skip_earth_engine:
             print("\n[Earth Engine source ingestion] SKIPPED: explicit skip; verifying persisted county/ward inventory", flush=True)
             stages.append({"stage": "Earth Engine source ingestion", "status": "skipped", "reason": "explicit skip"})
             ingestion_ok, inventory_detail = verify_latest_inventory()
         else:
+            inventory_command = python_run("-m", "oseas.ingest")
+            if args.refresh_inventory:
+                inventory_command.append("--refresh")
             ingestion_ok = run_stage(
                 "Earth Engine source ingestion",
-                python_run("-m", "oseas.ingest"),
+                inventory_command,
                 stages,
                 accepted_exit_codes=(0, 2),
             )

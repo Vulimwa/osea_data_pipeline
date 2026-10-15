@@ -4,6 +4,8 @@ Base URL: `/api/v1/oseas`. Routes require a Supabase access token when `OSEAS_RE
 
 ## Initial map wiring
 
+For unauthenticated production map access, set `OSEAS_PUBLIC_READ_API=true` on the backend. This exposes only read-only `GET` requests; all non-GET requests still require authentication.
+
 1. Call `GET /api/v1/oseas/layers/asset_exposure/geojson /readiness` and `GET /catalog` to show backend/schema state and source attribution.
 2. Call `GET /layers` to enumerate map routes; stored derived layers report `queryable` without making a claim about whether rows exist. Request `?includeCounts=true` when exact `featureCount`, `hasData`, and `available`/`not_assessed` state are needed; map queries already return filtered totals.
 3. Load available source/reference features with `GET /layers/flood_reference/geojson?eventKey=...` or `GET /layers/hydrography/geojson?type=river|lake`.

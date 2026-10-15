@@ -4,6 +4,7 @@ import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import './lib/calcite';
 import App from './App';
 import './styles.css';
+import { applyTheme, getThemePreference } from './lib/theme';
 
 const queryClient = new QueryClient({
   defaultOptions: {
@@ -14,8 +15,7 @@ const queryClient = new QueryClient({
   },
 });
 
-document.documentElement.setAttribute('data-theme', 'dark');
-document.body.classList.add('calcite-mode-dark');
+applyTheme(getThemePreference());
 
 const root = document.getElementById('root');
 if (!root) throw new Error('Missing #root');

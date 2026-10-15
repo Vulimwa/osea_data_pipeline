@@ -10,6 +10,14 @@ export const KANO_BBOX = {
   north: 0.1,
 } as const;
 
+export const KENYA_BBOX = {
+  west: 33.9,
+  south: -4.8,
+  east: 41.9,
+  north: 5.2,
+} as const;
+
+export type Bbox = { west: number; south: number; east: number; north: number };
 export const PILOT_DATASET = 'osm_kano_pilot';
 
 export type Readiness = {
@@ -18,7 +26,10 @@ export type Readiness = {
   checks?: {
     database?: { status?: string };
     inventory?: { status?: string };
-    environmentalEvidence?: Record<string, number>;
+    environmentalEvidence?: Record<
+      string,
+      { status?: string; dailyObservations?: number; activeDetectionPoints?: number; observationRows?: number }
+    >;
     populationExposure?: { status?: string; assessmentRows?: number };
     latestFloodScreen?: { status?: string };
     [key: string]: unknown;
@@ -50,7 +61,7 @@ export type AssetFeature = {
 export type AssetCollection = {
   type: 'FeatureCollection';
   features: AssetFeature[];
-  pagination?: { total: number; limit: number; offset: number };
+  pagination?: { total: number; limit: number; offset: number; returned?: number; truncated?: boolean };
   status?: string;
 };
 
@@ -64,6 +75,9 @@ export type GeoJsonCollection = {
   }>;
   status?: string;
   layer?: string;
+  count?: number;
+  pagination?: { total: number; limit: number; offset: number };
+  dataStatus?: string;
 };
 
 export type ExposureRow = {
@@ -99,15 +113,24 @@ export type CriticalityRow = {
 };
 
 async function getJson<T>(path: string): Promise<T> {
-  const res = await fetch(`${API_BASE}${path}`);
+  const res = await fetch(`${API_BASE}${path}`, {
+    headers: { Accept: 'application/json' },
+  });
   if (!res.ok) {
     const text = await res.text();
-    throw new Error(`${res.status} ${path}: ${text.slice(0, 240)}`);
+    let detail = text.slice(0, 240);
+    try {
+      const payload = JSON.parse(text) as { message?: string; error?: string };
+      detail = payload.message || payload.error || detail;
+    } catch {
+      // Keep the response excerpt when the API does not return JSON.
+    }
+    throw new Error(`${res.status} ${path}: ${detail}`);
   }
   return res.json() as Promise<T>;
 }
 
-export function bboxQuery(box = KANO_BBOX): string {
+export function bboxQuery(box: Bbox = KANO_BBOX): string {
   return `${box.west},${box.south},${box.east},${box.north}`;
 }
 
@@ -121,18 +144,19 @@ export function fetchLayers() {
 
 export async function fetchAssetsInBbox(
   limit = 500,
-  opts?: { sourceDataset?: string; maxRows?: number },
+  opts?: { sourceDataset?: string; maxRows?: number; bbox?: Bbox },
 ) {
   const pages: AssetFeature[] = [];
   let offset = 0;
   let total = Infinity;
   const maxRows = opts?.maxRows ?? 5000;
+  const box = opts?.bbox ?? KANO_BBOX;
   const dataset = opts?.sourceDataset
     ? `&sourceDataset=${encodeURIComponent(opts.sourceDataset)}`
     : '';
   while (offset < total && offset < maxRows) {
     const page = await getJson<AssetCollection>(
-      `/assets?bbox=${bboxQuery()}&limit=${limit}&offset=${offset}${dataset}`,
+      `/assets?bbox=${bboxQuery(box)}&limit=${limit}&offset=${offset}${dataset}`,
     );
     pages.push(...(page.features ?? []));
     total = page.pagination?.total ?? pages.length;
@@ -147,24 +171,118 @@ export function fetchPilotAssets() {
   return fetchAssetsInBbox(200, { sourceDataset: PILOT_DATASET, maxRows: 500 });
 }
 
-/** Optional other inventory in the bbox (slow; load only when layer is on). */
-export function fetchInventorySample() {
-  return fetchAssetsInBbox(100, { maxRows: 300 });
+export async function fetchAssetMapCollection(box: Bbox, sourceDataset?: string, maxRows = 2000) {
+  const features: AssetFeature[] = [];
+  const limit = 500;
+  let offset = 0;
+  let total = Infinity;
+  let status: string | undefined;
+  const dataset = sourceDataset ? `&sourceDataset=${encodeURIComponent(sourceDataset)}` : '';
+  while (offset < total && offset < maxRows) {
+    const page = await getJson<AssetCollection>(
+      `/assets?bbox=${bboxQuery(box)}&limit=${limit}&offset=${offset}${dataset}`,
+    );
+    features.push(...(page.features ?? []));
+    total = page.pagination?.total ?? features.length;
+    status = page.status;
+    offset += limit;
+    if (!page.features?.length) break;
+  }
+  return {
+    type: 'FeatureCollection' as const,
+    features,
+    status,
+    pagination: {
+      total: Number.isFinite(total) ? total : features.length,
+      limit,
+      offset: 0,
+      returned: features.length,
+      truncated: features.length < total,
+    },
+  };
 }
 
-/** Soft timeout so a hung layer never blanks the shell. */
-export function withTimeout<T>(promise: Promise<T>, ms: number, fallback: T): Promise<T> {
-  return new Promise((resolve) => {
-    const timer = setTimeout(() => resolve(fallback), ms);
-    promise
-      .then((value) => {
+export async function fetchGeoJsonLayer(
+  layer: string,
+  box: Bbox,
+  options: { sourceDataset?: string; maxRows?: number } = {},
+): Promise<GeoJsonCollection> {
+  const maxRows = options.maxRows ?? 2000;
+  const limit = 500;
+  const features: GeoJsonCollection['features'] = [];
+  let offset = 0;
+  let total = Infinity;
+  let firstResponse: GeoJsonCollection | null = null;
+  const query = new URLSearchParams({ bbox: bboxQuery(box), limit: String(limit) });
+  if (options.sourceDataset) query.set('sourceDataset', options.sourceDataset);
+  while (offset < total && offset < maxRows) {
+    query.set('offset', String(offset));
+    const page = await getJson<GeoJsonCollection>(
+      `/layers/${encodeURIComponent(layer)}/geojson?${query.toString()}`,
+    );
+    firstResponse ??= page;
+    features.push(...(page.features ?? []));
+    total = page.pagination?.total ?? page.count ?? features.length;
+    offset += limit;
+    if (!page.features?.length) break;
+  }
+  return {
+    ...(firstResponse ?? { type: 'FeatureCollection' as const, features: [] }),
+    features,
+    count: features.length,
+    pagination: {
+      total: Number.isFinite(total) ? total : features.length,
+      limit,
+      offset: 0,
+    },
+  };
+}
+
+export async function fetchReferenceLayer(
+  layer: 'flood_reference' | 'hydrography',
+  box: Bbox,
+  maxRows = 2000,
+): Promise<GeoJsonCollection> {
+  const limit = 500;
+  const features: GeoJsonCollection['features'] = [];
+  let offset = 0;
+  let total = Infinity;
+  let firstResponse: GeoJsonCollection | null = null;
+  const query = new URLSearchParams({ bbox: bboxQuery(box), limit: String(limit) });
+  while (offset < total && offset < maxRows) {
+    query.set('offset', String(offset));
+    const page = await getJson<GeoJsonCollection>(`/layers/${layer}/geojson?${query.toString()}`);
+    firstResponse ??= page;
+    features.push(...(page.features ?? []));
+    total = page.pagination?.total ?? page.count ?? features.length;
+    offset += limit;
+    if (!page.features?.length) break;
+  }
+  return {
+    ...(firstResponse ?? { type: 'FeatureCollection' as const, features: [] }),
+    features,
+    count: features.length,
+    pagination: {
+      total: Number.isFinite(total) ? total : features.length,
+      limit,
+      offset: 0,
+    },
+  };
+}
+
+export function withTimeout<T>(promise: Promise<T>, ms: number): Promise<T> {
+  return new Promise((resolve, reject) => {
+    const timer = setTimeout(() => reject(new Error(`API request timed out after ${ms / 1000} seconds`)), ms);
+    promise.then(
+      (value) => {
         clearTimeout(timer);
         resolve(value);
-      })
-      .catch(() => {
+      },
+      (error: unknown) => {
         clearTimeout(timer);
-        resolve(fallback);
-      });
+        reject(error);
+      },
+    );
   });
 }
 
@@ -186,6 +304,14 @@ export function fetchAssetExposureLayer() {
   );
 }
 
+export function fetchPriorities() {
+  return getJson<{ data?: Array<Record<string, unknown>>; status?: string }>('/priorities?limit=10');
+}
+
+export function fetchDatasetCatalog() {
+  return getJson<{ data?: Array<Record<string, unknown>>; count?: number }>('/catalog');
+}
+
 export function fetchAssetExposure(id: string) {
   return getJson<{ assetId: string; status: string; data: ExposureRow[] }>(
     `/assets/${id}/exposure`,
@@ -201,6 +327,12 @@ export function fetchAssetVulnerability(id: string) {
 export function fetchAssetCriticality(id: string) {
   return getJson<{ assetId: string; status: string; data: CriticalityRow[] }>(
     `/assets/${id}/criticality`,
+  );
+}
+
+export function fetchAssetServiceDependencies(id: string) {
+  return getJson<{ assetId: string; status: string; data: Array<Record<string, unknown>> }>(
+    `/assets/${id}/service-dependencies`,
   );
 }
 

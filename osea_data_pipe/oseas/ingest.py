@@ -328,6 +328,57 @@ def _ensure_dataset(cur: Any, spec: Any, asset_id: str) -> None:
     )
 
 
+def _persisted_feature_count(cur: Any, spec: Any) -> int:
+    if spec.target in ("county", "ward"):
+        table, dataset_column = "administrative_units", "source_dataset_key"
+    elif spec.target == "critical_service":
+        table, dataset_column = "critical_services", "source_dataset_key"
+    elif spec.target == "hydrography":
+        table, dataset_column = "hydrography_features", "dataset_key"
+    elif spec.target == "flood_reference":
+        table, dataset_column = "flood_reference_features", "dataset_key"
+    else:
+        table, dataset_column = "energy_assets", "source_dataset_key"
+    cur.execute(f"SELECT COUNT(*) FROM {table} WHERE {dataset_column}=%s", (spec.key,))
+    return int(cur.fetchone()[0])
+
+
+def _complete_persisted_feature_count(connection: Any, spec: Any, asset_id: str) -> int | None:
+    """Reuse a source only when its last successful import still matches persisted row counts."""
+    with connection.cursor() as cur:
+        cur.execute(
+            """
+            SELECT dv.feature_count,dv.metadata
+            FROM dataset_versions dv
+            JOIN ingestion_runs ir ON ir.id=dv.processing_run_id
+            WHERE dv.dataset_key=%s AND dv.source_reference=%s
+              AND ir.pipeline_name='oseas_earth_engine_ingest'
+              AND ir.status IN ('completed','partial')
+            ORDER BY dv.retrieved_at DESC
+            LIMIT 1
+            """,
+            (spec.key, asset_id),
+        )
+        version = cur.fetchone()
+        if not version:
+            return None
+        try:
+            imported_count = int(version[0])
+            metadata = version[1]
+            if isinstance(metadata, str):
+                metadata = json.loads(metadata)
+            if not isinstance(metadata, dict):
+                return None
+            source_count = int(metadata["source_feature_count"])
+            skipped_count = int(metadata["skipped_geometry_count"])
+        except (KeyError, TypeError, ValueError, json.JSONDecodeError):
+            return None
+        if imported_count != source_count or skipped_count:
+            return None
+        persisted_count = _persisted_feature_count(cur, spec)
+        return imported_count if persisted_count == imported_count else None
+
+
 def _start_run(cur: Any, run_id: str, total: int) -> None:
     cur.execute(
         "INSERT INTO ingestion_runs (id, pipeline_name, status, started_at, metadata) VALUES (%s, 'oseas_earth_engine_ingest', 'running', NOW(), %s::jsonb)",
@@ -416,7 +467,7 @@ def _validate_schema(connection: Any) -> None:
         raise RuntimeError("OSEAS schema is incomplete; apply database/schema.sql first. Missing: " + ", ".join(missing))
 
 
-def run(audit_only: bool = False) -> int:
+def run(audit_only: bool = False, refresh: bool = False) -> int:
     try:
         import ee
     except ImportError as exc:
@@ -466,6 +517,27 @@ def run(audit_only: bool = False) -> int:
         for spec, asset_id in assets:
             started = datetime.now(timezone.utc)
             try:
+                if not audit_only and not refresh:
+                    cached_count = _complete_persisted_feature_count(connection, spec, asset_id)
+                    if cached_count is not None:
+                        item = {
+                            "dataset_key": spec.key,
+                            "asset_id": asset_id,
+                            "status": "reused",
+                            "features_processed": 0,
+                            "features_persisted": 0,
+                            "features_reused": cached_count,
+                            "features_skipped_geometry": 0,
+                            "reused_persisted_output": True,
+                            "checked_at": started.isoformat(),
+                        }
+                        report.append(item)
+                        LOG.info(
+                            "Reusing persisted dataset=%s rows=%s; use --refresh to fetch source features again",
+                            spec.key,
+                            cached_count,
+                        )
+                        continue
                 details = inspect_asset(ee, asset_id)
                 count = 0
                 skipped_geometry = 0
@@ -538,13 +610,14 @@ def main() -> None:
     parser = argparse.ArgumentParser(description="Validate and ingest configured OSEAS Earth Engine assets.")
     parser.add_argument("--audit-only", action="store_true", help="Validate asset existence, type, sample geometry and schema without writing to PostGIS.")
     parser.add_argument("--datasets", help="Comma-separated configured dataset keys to process; defaults to all configured assets.")
+    parser.add_argument("--refresh", action="store_true", help="Fetch and upsert source features even when a complete persisted version is available.")
     parser.add_argument("--log-level", default=os.getenv("LOG_LEVEL", "INFO"))
     args = parser.parse_args()
     if args.datasets:
         os.environ["OSEAS_DATASETS"] = args.datasets
     logging.basicConfig(level=getattr(logging, args.log_level.upper(), logging.INFO), format="%(asctime)s %(levelname)s %(name)s %(message)s")
     try:
-        raise SystemExit(run(audit_only=args.audit_only))
+        raise SystemExit(run(audit_only=args.audit_only, refresh=args.refresh))
     except Exception as exc:
         LOG.error("OSEAS ingestion did not run: %s", exc)
         raise SystemExit(1)

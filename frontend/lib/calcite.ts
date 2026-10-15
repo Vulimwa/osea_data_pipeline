@@ -19,4 +19,5 @@ import '@esri/calcite-components/components/calcite-loader';
 import '@esri/calcite-components/components/calcite-action';
 import '@esri/calcite-components/components/calcite-action-bar';
 import '@esri/calcite-components/components/calcite-sheet';
+import '@esri/calcite-components/components/calcite-dialog';
 import '@esri/calcite-components/main.css';

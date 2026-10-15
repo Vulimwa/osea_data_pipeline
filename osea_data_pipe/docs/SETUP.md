@@ -35,7 +35,7 @@ npm run db:setup
 
 The script performs a read-only check. It does not apply schema or migrate legacy data. Python accepts `DB_URL`, `DATABASE_URL`, or `SUPABASE_DB_URL`. Use the Postgres connection URL rather than the Supabase service role key for direct PostGIS writes.
 
-The OSEAS API requires a Supabase Auth bearer token in production. Keep `SUPABASE_SERVICE_ROLE_KEY` on the backend only; it is used only to validate access tokens through Supabase Auth. Set `OSEAS_REQUIRE_AUTH=true` to enforce the same check during development. Do not expose the service-role key to a browser or client app.
+The OSEAS API requires a Supabase Auth bearer token in production by default. To serve public map data without sign-in, set `OSEAS_PUBLIC_READ_API=true`; this permits only `GET` requests through the OSEAS API router, and other methods remain authenticated. The setting is disabled by default. Keep `SUPABASE_SERVICE_ROLE_KEY` on the backend only; it is used to validate access tokens when authentication is required. Set `OSEAS_REQUIRE_AUTH=true` to enforce authentication during development. Do not expose the service-role key to a browser or client app.
 
 For a hosted API, set `NODE_ENV=production`, `DB_URL` to the Supabase Postgres pooler URL, `SUPABASE_URL`, `SUPABASE_SERVICE_ROLE_KEY`, and `CORS_ORIGIN` to the frontend origin(s). Build with `npm run build` and start with `npm start`. Set `TRUST_PROXY_HOPS` to the number of trusted reverse proxies in front of the service (usually `1` behind a single host proxy); leave it `0` when clients connect directly. Keep `SUPABASE_SERVICE_ROLE_KEY` and `DB_URL` in the host's server-side secret store.
 
@@ -48,6 +48,7 @@ During Blueprint setup, provide these server-side values when Render prompts for
 - `DB_URL`: the Supabase Postgres pooler URL.
 - `SUPABASE_URL` and `SUPABASE_SERVICE_ROLE_KEY`: used by the API to validate incoming Supabase access tokens. Never put the service-role key in browser code.
 - `CORS_ORIGIN`: the exact HTTPS origin(s) of the frontend, comma-separated if there is more than one. Wildcards are rejected in production.
+- `OSEAS_PUBLIC_READ_API=true`: optional demo setting to allow public GET access to read-only OSEAS routes; all non-GET methods remain authenticated.
 
 The OSEAS routes require `Authorization: Bearer <Supabase access token>` in production. The teammate's Kano pilot can be queried using `GET /api/v1/oseas/assets?sourceDataset=osm_kano_pilot&bbox=34.60,-0.40,35.30,0.10`, then the returned feature ID with `/assets/{id}/exposure` and `/assets/{id}/vulnerability`. Map clients can use `/layers/asset_vulnerability/geojson?sourceDataset=osm_kano_pilot&bbox=...`; `/layers` lists that layer and its supported filters. Heat and wildfire records marked `not_assessed` remain unscored.
 

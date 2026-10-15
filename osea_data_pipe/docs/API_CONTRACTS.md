@@ -66,6 +66,7 @@ GeoJSON response shape:
 }
 ```
 
-`400 INVALID_BBOX`, `400 INVALID_ID`, `400 INVALID_LEVEL`, `404 NOT_FOUND` and database/schema errors use the standard error envelope. In production, every `/api/v1/oseas/*` route requires a Supabase Auth access token in `Authorization: Bearer <token>`; the backend validates it with Supabase Auth. `SUPABASE_SERVICE_ROLE_KEY` is server-side only and is never returned by the API. In development, routes are open unless `OSEAS_REQUIRE_AUTH=true`.
+`400 INVALID_BBOX`, `400 INVALID_ID`, `400 INVALID_LEVEL`, `404 NOT_FOUND` and database/schema errors use the standard error envelope. In production, `/api/v1/oseas/*` routes require a Supabase Auth access token by default; the backend validates it with Supabase Auth. `OSEAS_PUBLIC_READ_API=true` is an opt-in exception that makes `GET` routes public, while non-GET requests remain authenticated. `SUPABASE_SERVICE_ROLE_KEY` is server-side only and is never returned by the API. In development, routes are open unless `OSEAS_REQUIRE_AUTH=true`.
+
 
 Only outputs with implemented source/processing adapters and stored evidence are served as layers. The 2023 flood reference and river/lake layers are available after applying the additive schema and ingesting those assets. Climate/terrain/heat/fire/population rasters and validated scores remain unassessed until their processors produce evidence; empty tables must not be displayed as zero risk.

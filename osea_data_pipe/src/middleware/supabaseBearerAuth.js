@@ -3,12 +3,13 @@
 const config = require('../config');
 const { AppError } = require('./errorHandler');
 
-function isRequired(settings = config) {
+function isRequired(settings = config, method) {
+  if (settings.OSEAS_PUBLIC_READ_API === true && method?.toUpperCase() === 'GET') return false;
   return settings.NODE_ENV === 'production' || settings.OSEAS_REQUIRE_AUTH === true;
 }
 
 async function supabaseBearerAuth(req, _res, next) {
-  if (!isRequired()) return next();
+  if (!isRequired(config, req.method)) return next();
   const authorization = req.headers.authorization || '';
   const match = authorization.match(/^Bearer\s+([^\s]+)$/i);
   if (!match) return next(new AppError('AUTH_REQUIRED', 'A valid Supabase access token is required', 401));

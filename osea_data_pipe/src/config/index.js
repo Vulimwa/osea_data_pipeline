@@ -38,6 +38,10 @@ const configSchema = z.object({
     z.boolean(),
     z.enum(["true", "false"]).transform((value) => value === "true"),
   ]).default(false),
+  OSEAS_PUBLIC_READ_API: z.union([
+    z.boolean(),
+    z.enum(["true", "false"]).transform((value) => value === "true"),
+  ]).default(false),
   DB_POOL_MIN: z.coerce.number().default(2),
   DB_POOL_MAX: z.coerce.number().default(10),
   DB_TIMEOUT_MS: z.coerce.number().default(10000),

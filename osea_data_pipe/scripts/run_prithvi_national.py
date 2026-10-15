@@ -33,6 +33,7 @@ from scripts.run_prithvi_flood import (  # noqa: E402
     MODEL_LOCK,
     MODEL_REVISION,
     SUPPORTED_MODEL_ID,
+    _configure_proj_data,
 )
 
 LOG = logging.getLogger("oseas.prithvi.national")
@@ -179,6 +180,18 @@ def _tile_bounds(grid_x: int, grid_y: int, overlap_pixels: int) -> tuple[float, 
         center_x + half_chip,
         center_y + half_chip,
     )
+
+
+def _earth_engine_roi(ee: Any, bounds: tuple[float, float, float, float]) -> Any:
+    from rasterio.warp import transform_bounds
+
+    wgs84_bounds = transform_bounds(
+        f"EPSG:{GRID_CRS}",
+        "EPSG:4326",
+        *bounds,
+        densify_pts=21,
+    )
+    return ee.Geometry.Rectangle(list(wgs84_bounds), geodesic=False)
 
 
 def _validate_schema(cur: Any) -> None:
@@ -418,11 +431,7 @@ def _download_tile(
 
     dimensions = tile_dimensions(overlap_pixels)
     min_x, min_y, max_x, max_y = _tile_bounds(grid_x, grid_y, overlap_pixels)
-    roi = ee.Geometry.Rectangle(
-        [min_x, min_y, max_x, max_y],
-        proj=ee.Projection(f"EPSG:{GRID_CRS}"),
-        geodesic=False,
-    )
+    roi = _earth_engine_roi(ee, (min_x, min_y, max_x, max_y))
     collection = (
         ee.ImageCollection("COPERNICUS/S2_HARMONIZED")
         .filterBounds(roi)
@@ -935,6 +944,7 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
     if MODEL_ID != SUPPORTED_MODEL_ID:
         raise RuntimeError(f"National preprocessing supports only the pinned model {SUPPORTED_MODEL_ID}")
     validate_args(args)
+    _configure_proj_data()
     project = os.getenv("GEE_PROJECT_ID", "").strip()
     from oseas.config import database_url
 
