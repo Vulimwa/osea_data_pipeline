@@ -18,16 +18,20 @@ Flood candidates are screening evidence, not confirmed inundation or a calibrate
 ## Setup
 
 1. Install dependencies: `npm ci` and `python -m pip install -r requirements.txt`.
-2. Configure `.env` using placeholders in `.env.example`; never commit secrets.
+2. Configure `.env` using placeholders in `.env.example`; never commit or paste secrets. Rotate any credential that has been exposed before running commands that write to the database.
 3. Apply [`database/schema.sql`](database/schema.sql) in Supabase SQL Editor, then run `npm run db:setup`.
 4. Check source access with `npm run oseas:audit` and `npm run oseas:catalog:audit`.
-5. When setup is complete, ingest infrastructure with `npm run oseas:ingest` and monitor using `npm run oseas:status`.
-6. After a completed source run, use the bounded flood command documented in [`docs/END_TO_END_RUNBOOK.md`](docs/END_TO_END_RUNBOOK.md).
+5. After credential rotation and the read-only checks, run the dependency-ordered, non-destructive pipeline with `npm run oseas:run`.
+6. Inspect `outputs/last_pipeline_run.json`, `npm run oseas:status`, and the read-only layers under `/api/v1/oseas`.
+
+The 2026-10-15 audit found the latest ingestion run terminal `partial` (one source failed); it was not still processing. The ward-geometry fix is unit-tested, but the database has not been refreshed with it. For the safe recovery and verification sequence, use the “Recovery after an abrupt shutdown” section in the runbook before starting downstream processing.
+The single command preserves existing rows and uses source-key upserts. It does not run `clean`, stale-run recovery, or local image workflows by default. The optional Kano demo is an API-only filter over the separate published pilot (`sourceDataset=osm_kano_pilot` and its bbox); it does not narrow or replace nationwide processing. The requested indicator/output checklist is in [`../outputs.md`](../outputs.md); report stages that are unsupported or blocked remain explicit rather than being marked complete.
 
 ## Documentation
 
 - [`docs/PIPELINE_AUDIT.md`](docs/PIPELINE_AUDIT.md): evidence-backed baseline, stage status, blockers and organizer indicator matrix.
 - [`docs/PIPELINE_CONTRACTS.md`](docs/PIPELINE_CONTRACTS.md): actual stage inputs, outputs, dependencies and acceptance gates.
+- [`docs/ASSET_AUDIT.md`](docs/ASSET_AUDIT.md): historical audit of the original 14 Earth Engine assets; later source additions are tracked in the data catalog.
 - [`docs/DATA_CATALOG.md`](docs/DATA_CATALOG.md): public sources, access, metadata and validation state.
 - [`docs/ASSESSMENT_METHODS.md`](docs/ASSESSMENT_METHODS.md): indicator methods, missing-data behavior and limitations.
 - [`docs/MODEL_CARD.md`](docs/MODEL_CARD.md): flood method and Prithvi status.

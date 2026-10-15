@@ -49,24 +49,34 @@ This command checks for an active UNOSAT import and refuses to overlap it. It wr
 
 ## 1b. Single configured pipeline command
 
-After the initial schema and environment setup, run:
+After the initial schema and environment setup, rotate any exposed database credential, confirm the Earth Engine/database credentials are configured locally, and run:
 
 ```powershell
-npm run oseas:pipeline
+npm run oseas:run
 ```
 
-It performs database preflight, configured Earth Engine feature ingestion, county/ward assignment, NASA POWER daily heat acquisition, Black Marble monthly radiance/context when the 36-month period is configured, idempotent UNOSAT import, CHIRPS 30-day event rainfall totals and anomalies by county/ward, WorldPop acquisition and population persistence, evidence-gated asset and ward/county summaries, latest-day FIRMS acquisition when a map key is configured, and bounded Sentinel-1/Prithvi flood stages when AOI/date settings are supplied. It prints every stage and writes `outputs/last_pipeline_run.json`. Failed and blocked stages produce a `partial` report and a nonzero exit; optional unconfigured sources are listed with their blocker. Use `npm run oseas:pipeline -- --skip-earth-engine` to work from the existing inventory, or `--skip-worldpop-download` when the validated raster is already present. A process lock rejects overlapping orchestrators. If a matching VIIRS job is active, the command waits for it, streams progress from the acquisition log, validates its completed run and persisted rows, then continues without launching a duplicate. On reruns it reuses completed VIIRS output only when the periods and full row set match the current configuration.
+The command runs database preflight, Earth Engine vector ingestion, county/ward assignment, NASA POWER heat, UNOSAT reference ingest, CHIRPS rainfall zonal statistics, NASA FIRMS if configured, evidence-gated assessments, and the bounded Sentinel-1 Earth Engine screen when an AOI/date window is configured. It writes the per-stage report to `outputs/last_pipeline_run.json` and prints final database status. Existing feature and assessment records are retained and updated through stable-key upserts; no database reset or cleanup is performed.
+
+The default command does **not** start local image workflows. It reuses a matching completed Black Marble result if one is already persisted; otherwise Black Marble, WorldPop population processing, and Prithvi inference are reported as blocked. Their current implementations require local image/raster workflows rather than the intended server-side Earth Engine processing. Opt in only when you explicitly want those local workflows with `npm run oseas:run -- --allow-image-downloads`; this does not change the national scope or score the Kano pilot. `clean`, lint/test checks, read-only audits, and stale-run recovery are not data pipeline stages and are not invoked automatically. In particular, stale-run recovery changes run metadata and must only be used after separately confirming that the writer process is dead.
+
+### Optional Kano demo view
+
+The national pipeline remains nationwide. To display only the already-published Kano pilot through the read API, query `GET /api/v1/oseas/assets?sourceDataset=osm_kano_pilot&bbox=34.60,-0.40,35.30,0.10` and use each returned asset ID with the exposure and vulnerability routes. The same filters are supported by the `asset_exposure` and `asset_vulnerability` GeoJSON layers. This is a read-only view of the separate pilot; do not change national AOI settings or rerun the national pipeline as a way to produce the pilot scores. Pilot scores remain screening heuristics, and heat/wildfire `not_assessed` values must not be styled as zero risk.
+
+The importer may return a partial status for skipped invalid geometries. The orchestrator verifies the newest database run has no failed assets and that both county and ward source features persisted before assignment and dependent analysis can run. Geometry warnings remain visible and cause the overall report to be `partial`. If ingestion, boundary verification, or assignment fails, dependent ward/county outputs are blocked instead of being regenerated from stale boundaries.
+
+The Earth Engine reducers return candidate vectors and zonal values, not source imagery. Map-ready outputs are persisted to PostGIS and served through the read-only API under `/api/v1/oseas`; each stage’s status is the authority for whether its output is usable. See [`../PIPELINE_CONTRACTS.md`](PIPELINE_CONTRACTS.md), [`../PIPELINE_AUDIT.md`](PIPELINE_AUDIT.md), and the project checklist [`../../outputs.md`](../../outputs.md). A process lock rejects overlapping orchestrators.
 
 The current first flood screens use a 4.92 km² AOI around the Nairobi/Kiambu UNOSAT reference polygon (`37.0588,-1.2335,37.0788,-1.2135`), with event imagery from 2024-04-29 through 2024-05-04 and a pre-event Sentinel-1 baseline from 2024-03-15 through 2024-04-28 (45 days). This is one localized pilot window; county/ward summaries only cover reporting units intersecting that AOI and must not be described as a national Prithvi map. The bounded Sentinel-1 flood event stage uses `OSEAS_FLOOD_BBOX`, `OSEAS_FLOOD_EVENT_START/END`, and `OSEAS_FLOOD_BASELINE_START/END`. Prithvi uses `OSEAS_PRITHVI_BBOX`, `OSEAS_PRITHVI_EVENT_START/END`, and `OSEAS_PRITHVI_MAX_CLOUD_PERCENT` (default 30); scene-wide cloud filtering is followed by QA60 masking and a 50% AOI-local clear-pixel minimum. The sample uses 100 because the 2024-05-02 scene has 62.9% scene-wide cloud but 99.6% clear pixels within the selected AOI. Each Prithvi run is capped at 5 km² and writes candidate polygons, asset intersections, county/ward summaries and model provenance to PostGIS. Inference is not Kenya validation. `OSEAS_HEAT_START_DATE`, `OSEAS_HEAT_END_DATE`, and `OSEAS_HEAT_SCREEN_THRESHOLD_C` configure heat processing (defaults: 2024 and 35 C). `OSEAS_FIRE_START_DATE/END` optionally select a historical FIRMS window. `OSEAS_FIRE_BBOX` can narrow the request envelope; an empty value derives it from Kenya county boundaries. The adapter filters returned points to those exact boundaries. `OSEAS_FIRE_SENSOR` defaults to `VIIRS_SNPP_NRT`, and `OSEAS_FIRE_PROXIMITY_KM` defaults to 5.
 
-## 1c. Recovery after an abrupt shutdown
+## Recovery after an abrupt shutdown
 
 The last audit found no active Earth Engine importer, Black Marble job or orchestrator process. The newest inventory run (`5c3d9c73-fb0a-41f6-8b35-c38ee4880021`) is already terminal `partial`; its failed ward source is not still processing. A regression fix now extracts polygonal members from ward/county `GeometryCollection` features, but the live database has not yet been refreshed with it.
 
 Before any new database write, rotate any database credential that has been exposed, update the local `.env` without pasting or logging the value, and verify the configured Earth Engine account and database access. Then, from `osea_data_pipe`:
 
 ```powershell
-npm run db:setup
+npm run oseas:status
 npm run oseas:audit
 npm run oseas:ingest
 npm run oseas:status
@@ -77,10 +87,10 @@ npm run oseas:status
 Only after the ward source is successful and the inventory result is reviewed, continue with:
 
 ```powershell
-npm run oseas:pipeline -- --skip-earth-engine --skip-worldpop-download
+npm run oseas:run -- --skip-earth-engine
 ```
 
-This avoids repeating the just-verified source import and the already-downloaded WorldPop raster, while refreshing assignments and running the configured downstream stages. Black Marble may take a long time; the orchestrator is designed to resume checkpoints, refuse duplicate jobs and verify persisted rows before reporting completion. Inspect `outputs/last_pipeline_run.json` and `npm run oseas:status` after it exits. If any prerequisite stage failed, stop and address it rather than presenting downstream results as accepted. Never delete a lock file while its recorded process might still be active.
+This reuses the verified inventory, refreshes assignments, and runs the configured no-image-download downstream stages. Black Marble, WorldPop GeoTIFF processing and Prithvi image inference remain explicitly blocked until server-side Earth Engine implementations are available. Inspect `outputs/last_pipeline_run.json` and `npm run oseas:status` after it exits. If any prerequisite stage failed, stop and address it rather than presenting downstream results as accepted. Never delete a lock file while its recorded process might still be active.
 
 ### CHIRPS rainfall event context
 

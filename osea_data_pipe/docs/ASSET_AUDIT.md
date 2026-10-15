@@ -1,6 +1,6 @@
 # OSEAS Earth Engine asset audit
 
-Live read-only audit completed on 13 October 2026. All 14 configured IDs resolved as Earth Engine `TABLE` assets under `projects/osea-hack/assets/osea/`. The audit read metadata, sampled feature geometry/properties and queried each full feature count. It did not write to Supabase.
+Historical live read-only audit completed on 13 October 2026. At that time, all 14 configured IDs resolved as Earth Engine `TABLE` assets under `projects/osea-hack/assets/osea/`. The audit read metadata, sampled feature geometry/properties and queried each full feature count. It did not write to Supabase. Three additional sources (rivers, lakes and the 2023 flood reference layer) were configured after this snapshot; see [`DATA_CATALOG.md`](DATA_CATALOG.md) for the current 17-source registry and later source-specific checks. This 14-source audit is not a current inventory completeness claim.
 
 | Dataset | Features | Sample geometry | Identifier or useful fields observed |
 |---|---:|---|---|

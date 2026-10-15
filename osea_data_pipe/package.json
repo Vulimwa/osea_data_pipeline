@@ -30,6 +30,7 @@
     "oseas:rainfall": "python scripts/ingest_chirps_rainfall.py",
     "oseas:fire": "python scripts/ingest_firms_fire.py",
     "oseas:pipeline": "python scripts/run_oseas_pipeline.py",
+    "oseas:run": "python scripts/run_oseas_pipeline.py",
     "oseas:wind:sync": "python scripts/sync_global_wind_atlas.py",
     "oseas:flood:screen": "python scripts/run_flood_screen.py",
     "oseas:prithvi:setup": "python scripts/download_prithvi_weights.py && python scripts/check_prithvi.py",

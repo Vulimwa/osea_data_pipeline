@@ -161,27 +161,8 @@ def reuse_matching_persisted_input(url: str, result: dict[str, Any]) -> dict[str
             return result
         compatible.sort(reverse=True)
         selected_hash = compatible[0][1]
-        matching_hashes = [candidate_hash for _, candidate_hash in compatible]
-        with connection.cursor() as cur:
-            cur.execute("""SELECT id,metadata->>'input_content_sha256' FROM ingestion_runs
-              WHERE pipeline_name='oseas_nasa_power_heat' AND status IN ('running','partial')
-                AND metadata->>'input_content_sha256'=ANY(%s)""", (matching_hashes,))
-            compatible_runs = cur.fetchall()
-            superseded_ids = [row[0] for row in compatible_runs if row[1] != selected_hash]
-            removed_rows = 0
-            if superseded_ids:
-                cur.execute("""DELETE FROM climate_observations WHERE dataset_key=%s AND processing_run_id=ANY(%s)
-                  AND variable IN ('T2M_MAX','T2M_MAX_MONTHLY_CLIMATOLOGY_ANOMALY')
-                  AND source_properties->>'inputSha256'=ANY(%s)""",
-                  (DATASET_KEY, superseded_ids, [row[1] for row in compatible_runs if row[1] != selected_hash]))
-                removed_rows = cur.rowcount
-                cur.execute("""UPDATE ingestion_runs SET status='partial',finished_at=NOW(),
-                  error_message='Superseded by a value-verified source fingerprint during idempotent resume',
-                  metadata=metadata||jsonb_build_object('superseded_duplicate_rows_removed',%s)
-                  WHERE id=ANY(%s)""", (removed_rows, superseded_ids))
-            connection.commit()
         result["content_sha256"] = selected_hash
-        print(f"NASA POWER heat: verified prior source values and reused fingerprint {selected_hash[:12]}; removed duplicate retry rows={removed_rows}", flush=True)
+        print(f"NASA POWER heat: verified prior source values and reused fingerprint {selected_hash[:12]}; existing rows are preserved", flush=True)
         return result
 
 

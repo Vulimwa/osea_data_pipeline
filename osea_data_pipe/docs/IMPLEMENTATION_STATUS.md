@@ -23,7 +23,7 @@ This snapshot was established read-only on 2026-10-15 using `npm run oseas:statu
 
 The ingestion importer commits bounded pages and upserts by source key, so already committed records remain available after a later page/source failure. This is safe for reruns, but means a failed source can leave a mixture of previously stored and newly refreshed rows; consumers must use run provenance and source-level status rather than treating the inventory as a single atomic snapshot.
 
-The baseline gap requiring the first fix is the ward `GeometryCollection` mismatch. The next operational gate is to verify the geometry normalization on tests, then have an operator rerun ingestion after confirming no competing writer is active. No live ingestion was started by this audit.
+The baseline gap requiring the first fix was the ward `GeometryCollection` mismatch. The normalization fix now passes regression tests; the next operational gate is to rotate any exposed database credential, confirm no competing writer is active, and rerun ingestion. No live ingestion was started by this audit.
 
 ## Changes made after the baseline
 
@@ -92,4 +92,4 @@ The command performs schema preflight, configured vector source ingestion, admin
 - Kenya-specific validation with compatible reference labels and precision/recall/IoU; no validation metrics are available.
 - Asset-to-administrative assignment refresh completed with 101,939 of 101,989 assets assigned (193,390 ward/county rows); 50 assets lack a county/ward assignment.
 - FIRMS latest-day acquisition is configured; the 2026-10-14 run returned zero detections and partial coverage, not a no-fire conclusion. Black Marble uses the same Earth Engine credentials as the imagery pipeline and the explicit full-month interval in `.env`.
-- The single-command runner now has explicit bounded flood dates, a baseline within the processor's 45-day limit, CHIRPS and Prithvi cloud-filter settings. A fresh all-stage orchestration has not been completed in one invocation; persisted stages have been verified individually. The restartable national night-lights batch is still running. Unsupported sources and missing scientific validation remain reported as limitations.
+- The single-command runner now has explicit bounded flood dates, a baseline within the processor's 45-day limit, CHIRPS and Prithvi cloud-filter settings. A fresh all-stage orchestration has not been completed in one invocation; persisted stages have been verified individually. The national night-lights batch is not running: its local log/checkpoints are incomplete, and no database run record exists. Unsupported sources and missing scientific validation remain reported as limitations.

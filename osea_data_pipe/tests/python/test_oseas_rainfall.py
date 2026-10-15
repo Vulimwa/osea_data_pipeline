@@ -2,6 +2,8 @@ import sys
 import unittest
 from datetime import date
 from pathlib import Path
+from types import SimpleNamespace
+from unittest.mock import patch
 
 ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT / "scripts"))
@@ -12,7 +14,7 @@ from ingest_chirps_rainfall import (  # noqa: E402
     event_window,
     stable_observation_id,
 )
-from run_oseas_pipeline import build_report, validate_ntl_result  # noqa: E402
+from run_oseas_pipeline import build_report, run_stage, validate_inventory_result, validate_ntl_result  # noqa: E402
 
 
 class ChirpsRainfallTests(unittest.TestCase):
@@ -45,6 +47,67 @@ class ChirpsRainfallTests(unittest.TestCase):
         report = build_report([{"stage": "rainfall", "status": "blocked", "reason": "missing input"}], "start")
         self.assertEqual(report["status"], "partial")
         self.assertEqual(report["incomplete_stage_count"], 1)
+        self.assertFalse(report["image_downloads_enabled"])
+
+    def test_pipeline_report_records_explicit_image_workflow_opt_in(self):
+        report = build_report([], "start", image_downloads_enabled=True)
+        self.assertTrue(report["image_downloads_enabled"])
+
+    def test_pipeline_report_does_not_call_partial_stages_complete(self):
+        report = build_report([{"stage": "inventory", "status": "partial"}], "start")
+        self.assertEqual(report["status"], "partial")
+        self.assertEqual(report["incomplete_stage_count"], 1)
+
+    @patch("run_oseas_pipeline.subprocess.run", return_value=SimpleNamespace(returncode=2))
+    def test_pipeline_accepts_warning_only_ingestion_as_partial(self, mock_run):
+        stages = []
+        successful = run_stage("inventory", ["not-run"], stages, accepted_exit_codes=(0, 2))
+        self.assertTrue(successful)
+        self.assertEqual(stages[0]["status"], "partial")
+        mock_run.assert_called_once()
+
+    def test_inventory_allows_geometry_warnings_when_county_and_ward_rows_persist(self):
+        valid, detail = validate_inventory_result("partial", {
+            "failed_assets": 0,
+            "assets": [
+                {"dataset_key": "kenya_counties", "status": "completed", "features_persisted": 47},
+                {"dataset_key": "kenya_wards", "status": "completed", "features_persisted": 1450},
+                {"dataset_key": "transmission_lines_33kv", "status": "partial", "features_persisted": 31620},
+            ],
+        })
+        self.assertTrue(valid)
+        self.assertIn("county and ward", detail)
+
+    def test_inventory_blocks_dependent_stages_when_ward_source_failed(self):
+        valid, reason = validate_inventory_result("partial", {
+            "failed_assets": 1,
+            "assets": [
+                {"dataset_key": "kenya_counties", "status": "completed", "features_persisted": 47},
+                {"dataset_key": "kenya_wards", "status": "failed", "features_persisted": 0},
+            ],
+        })
+        self.assertFalse(valid)
+        self.assertIn("failed asset", reason)
+
+    def test_inventory_requires_both_reporting_boundary_sources(self):
+        valid, reason = validate_inventory_result("completed", {
+            "failed_assets": 0,
+            "assets": [{"dataset_key": "kenya_counties", "status": "completed", "features_persisted": 47}],
+        })
+        self.assertFalse(valid)
+        self.assertIn("kenya_wards", reason)
+
+    def test_inventory_rejects_skipped_ward_geometries(self):
+        valid, reason = validate_inventory_result("partial", {
+            "failed_assets": 0,
+            "assets": [
+                {"dataset_key": "kenya_counties", "status": "completed", "features_persisted": 47},
+                {"dataset_key": "kenya_wards", "status": "partial", "features_persisted": 1420,
+                 "features_skipped_geometry": 30},
+            ],
+        })
+        self.assertFalse(valid)
+        self.assertIn("skipped 30", reason)
 
     def test_nightlights_stage_requires_complete_persisted_period(self):
         metadata = {

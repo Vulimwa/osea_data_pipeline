@@ -36,7 +36,7 @@ This update supersedes older statements below that described the latest ingestio
 
 ## Dataset coverage
 
-The three supplied Kenya Earth Engine layers passed a live asset audit: rivers (13,914 features), lakes (46 features with mixed Polygon/GeometryCollection types), and Nov 2023 flood reference (39 polygon features). Ingestion support, source-key upserts, provenance columns and GeoJSON routes are implemented. The current database schema is installed; source rows are available only where the targeted import has completed. Lake polygons can be used as a permanent-water exclusion in the Sentinel-1 baseline; river geometry remains context. The event-level area/population supplied for ADAM `FL-20231121-KEN-03` are stored as reported metadata, distinct from measured source-feature areas.
+The three supplied Kenya Earth Engine layers passed a live asset audit: rivers (13,914 features), lakes (46 features with mixed Polygon/GeometryCollection types), and Nov 2023 flood reference (39 polygon features). Ingestion support, source-key upserts, provenance columns and GeoJSON routes are implemented. The current database schema is installed; source rows are available only where the targeted import has completed. Lake polygons can be used as a permanent-water exclusion in the Sentinel-1 baseline; river geometry remains context. The event-level area/population supplied for ADAM `FL-20231121-KEN-03` are stored as reported metadata, distinct from measured source-feature areas. These source-specific results do not supersede the latest inventory state above.
 
 The three Global Wind Atlas country GeoTIFF endpoints returned HTTP 200 with TIFF content and have now been downloaded and inspected locally: each is 4,287 x 3,829 cells at 0.0025 degree spacing, WGS 84 geographic coordinates, and covers the Kenya bounding envelope. The inspected Kenya-envelope valid sample fractions are 70.3%; map copies mask negative values to nodata and retain source rasters/checksums. `wind_speed_10m` samples range 0.0441–17.2 m/s, `power_density_10m` 0.0000021–8,070 W/m2, and `air_density_10m` 0.728–1.17 kg/m3. These are sample ranges, not national summaries. The separate country GeoJSON URL returned HTTP 400. Wind layers are resource context, never a hazard or asset-failure score. See [`DATA_CATALOG.md`](DATA_CATALOG.md) and [`END_TO_END_RUNBOOK.md`](END_TO_END_RUNBOOK.md).
 
@@ -48,9 +48,10 @@ Derived output schema covers hazard events, flood extents, terrain and land-cove
 
 ## Required acceptance sequence
 
-1. The additive [`../database/schema.sql`](../database/schema.sql) is applied in the current Supabase database. Re-run `npm run db:setup` after future schema changes.
-2. The latest inventory run is complete with four geometry-warning datasets and zero failed assets. Check `npm run oseas:status`; duplicate source keys are currently zero.
-3. Asset-to-admin assignment refresh is available as `npm run oseas:assign-admin`; the Prithvi pilot computes AOI-local ward/county summaries directly and does not run a national assignment refresh.
+1. Run the read-only Earth Engine source audit and database status check before ingestion. The additive schema is installed; repeat `npm run db:setup` only when a schema check or migration requires it.
+2. After credential rotation, rerun the idempotent inventory importer. The ward source must succeed; inspect the three network datasets with 148 skipped geometries and document their disposition. A partial run is not accepted as a complete refreshed inventory.
+3. Refresh asset-to-admin assignments after the ward source succeeds, then verify source counts, run provenance and assignment coverage. Existing assignment counts predate the failed ward refresh and are not proof of current completeness.
+4. Run supported hazard/exposure stages only after their source, date, geographic coverage and validation prerequisites are checked. Unsupported dimensions remain `not_assessed`.
 5. For a selected event only, run the bounded flood screen with a documented reference window and AOI; independently compare candidates to available reference flood data before using them for planning.
 6. Inspect `/api/v1/oseas/readiness`, run provenance, quality checks, geometry and summaries. Treat results as screening evidence until validated.
 
