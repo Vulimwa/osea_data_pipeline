@@ -8,6 +8,7 @@ import Polyline from '@arcgis/core/geometry/Polyline';
 import Polygon from '@arcgis/core/geometry/Polygon';
 import Extent from '@arcgis/core/geometry/Extent';
 import Basemap from '@arcgis/core/Basemap';
+import WebTileLayer from '@arcgis/core/layers/WebTileLayer';
 import SketchViewModel from '@arcgis/core/widgets/Sketch/SketchViewModel';
 import Expand from '@arcgis/core/widgets/Expand';
 import LayerList from '@arcgis/core/widgets/LayerList';
@@ -17,7 +18,7 @@ import * as geometryEngine from '@arcgis/core/geometry/geometryEngine';
 import SimpleMarkerSymbol from '@arcgis/core/symbols/SimpleMarkerSymbol';
 import SimpleLineSymbol from '@arcgis/core/symbols/SimpleLineSymbol';
 import SimpleFillSymbol from '@arcgis/core/symbols/SimpleFillSymbol';
-import type { Bbox, GeoJsonCollection } from '../lib/api';
+import type { Bbox, GeeMapLayer, GeoJsonCollection } from '../lib/api';
 import { KANO_BBOX, KENYA_BBOX, pointCoords } from '../lib/api';
 import type { Theme } from '../lib/theme';
 
@@ -37,6 +38,8 @@ export type SpatialResult = {
 
 type Props = {
   overlays: MapOverlay[];
+  geeMapLayers: GeeMapLayer[];
+  onGeeLayerVisibilityChange: (layerId: string, visible: boolean) => void;
   selectedId: string | null;
   region: 'kenya' | 'kano';
   theme: Theme;
@@ -51,6 +54,7 @@ type Props = {
 };
 
 type OverlayLayers = Map<string, GraphicsLayer>;
+type GeeOverlayLayers = Map<string, WebTileLayer>;
 export type BasemapStyle = 'theme' | 'streets-vector' | 'satellite' | 'topo-vector';
 
 function mapExtent(box: Bbox) {
@@ -136,6 +140,7 @@ function makePopup(
     attributes[key] = valueForPopup(value);
   }
   const preferredKeys = [
+    'hazard_exposure',
     'assetType',
     'hazardType',
     'exposureStatus',
@@ -154,6 +159,9 @@ function makePopup(
     'level',
     'periodStart',
     'periodEnd',
+    'vulnerability_score',
+    'grid_vulnerability_index',
+    'analysis_timestamp',
   ];
   const byNormalizedKey = new Map(
     Object.keys(properties).map((key) => [key.toLowerCase().replace(/[^a-z0-9]/g, ''), key]),
@@ -247,9 +255,20 @@ function symbolFor(
     if (layerId === 'hydrography') {
       return new SimpleLineSymbol({ color: [86, 168, 206, 0.9], width: 1.5 });
     }
+    const voltage = Number(properties.voltageKv);
+    const networkStyle =
+      voltage >= 200
+        ? { color: '#e65100', width: 3 }
+        : voltage >= 132
+          ? { color: '#ffb74d', width: 2 }
+          : voltage >= 66
+            ? { color: '#ba68c8', width: 1.5 }
+            : voltage >= 33
+              ? { color: '#4fc3f7', width: 1 }
+              : null;
     return new SimpleLineSymbol({
-      color: layerId === 'asset_exposure' ? [240, 132, 66, 0.95] : [82, 179, 174, 0.85],
-      width: selected ? 3 : 1.5,
+      color: networkStyle?.color ?? (layerId === 'asset_exposure' ? [240, 132, 66, 0.95] : [82, 179, 174, 0.85]),
+      width: selected ? 3 : networkStyle?.width ?? 1.5,
     });
   }
   if (geometry.type === 'Polygon' || geometry.type === 'MultiPolygon') {
@@ -311,25 +330,38 @@ function symbolFor(
   }
   if (layerId === 'asset_vulnerability') {
     const score = Number(properties.score);
-    const vulnerabilityClass = String(properties.vulnerabilityClass ?? '').toLowerCase();
     const color =
-      vulnerabilityClass === 'high' || vulnerabilityClass === 'very_high'
-        ? [213, 72, 55, 1]
-        : vulnerabilityClass === 'moderate'
-          ? [235, 151, 64, 1]
-          : vulnerabilityClass === 'low'
-            ? [71, 155, 136, 1]
-            : Number.isFinite(score) && score >= 0.67
-              ? [213, 72, 55, 1]
-              : Number.isFinite(score) && score >= 0.34
-                ? [235, 151, 64, 1]
-                : [150, 158, 166, 0.9];
+      Number.isFinite(score) && score > 0.6
+        ? '#ff1744'
+        : Number.isFinite(score) && score > 0.3
+          ? '#ffea00'
+          : Number.isFinite(score)
+            ? '#00e676'
+            : [150, 158, 166, 0.9];
     return new SimpleMarkerSymbol({
       style: 'circle',
       color,
-      size: selected ? 13 : 10,
+      size: selected ? 9 : 6,
       outline: { color: [248, 242, 232, 0.95], width: selected ? 1.8 : 1 },
     });
+  }
+  if (layerId === 'assets') {
+    const type = String(properties.assetType ?? '').toLowerCase();
+    const source = String(properties.sourceDataset ?? '').toLowerCase();
+    const sourceProperties =
+      properties.sourceProperties != null && typeof properties.sourceProperties === 'object'
+        ? (properties.sourceProperties as Record<string, unknown>)
+        : {};
+    if (type.includes('mini_grid')) {
+      const development = source.includes('development') ||
+        String(sourceProperties.development_status ?? '').toLowerCase() === 'under_development';
+      return new SimpleMarkerSymbol({
+        style: 'circle',
+        color: development ? '#aa00ff' : '#00e5ff',
+        size: selected ? 7 : development ? 4 : 5,
+        outline: { color: [248, 242, 232, 0.9], width: selected ? 1.8 : 0.8 },
+      });
+    }
   }
   if (['assets', 'asset_exposure', 'asset_criticality', 'interventions'].includes(layerId)) {
     const isPilot = properties.sourceDataset === 'osm_kano_pilot';
@@ -350,6 +382,8 @@ function symbolFor(
 
 export function AssetMap({
   overlays,
+  geeMapLayers,
+  onGeeLayerVisibilityChange,
   selectedId,
   region,
   theme,
@@ -366,18 +400,21 @@ export function AssetMap({
   const viewRef = useRef<MapView | null>(null);
   const selectionLayerRef = useRef<GraphicsLayer | null>(null);
   const overlayLayersRef = useRef<OverlayLayers>(new Map());
+  const geeOverlayLayersRef = useRef<GeeOverlayLayers>(new Map());
   const sketchRef = useRef<SketchViewModel | null>(null);
   const onSelectRef = useRef(onSelect);
   const onExploreAssetEvidenceRef = useRef(onExploreAssetEvidence);
   const onExploreAreaEvidenceRef = useRef(onExploreAreaEvidence);
   const onAreaResultRef = useRef(onAreaResult);
   const onMapErrorRef = useRef(onMapError);
+  const onGeeLayerVisibilityChangeRef = useRef(onGeeLayerVisibilityChange);
   const overlaysRef = useRef(overlays);
   onSelectRef.current = onSelect;
   onExploreAssetEvidenceRef.current = onExploreAssetEvidence;
   onExploreAreaEvidenceRef.current = onExploreAreaEvidence;
   onAreaResultRef.current = onAreaResult;
   onMapErrorRef.current = onMapError;
+  onGeeLayerVisibilityChangeRef.current = onGeeLayerVisibilityChange;
   overlaysRef.current = overlays;
 
   useEffect(() => {
@@ -464,6 +501,7 @@ export function AssetMap({
       selectionLayerRef.current = null;
       sketchRef.current = null;
       overlayLayersRef.current.clear();
+      geeOverlayLayersRef.current.clear();
     };
   }, []);
 
@@ -471,6 +509,39 @@ export function AssetMap({
     const map = viewRef.current?.map;
     if (map) map.basemap = mapBasemap(theme, basemapStyle);
   }, [theme, basemapStyle]);
+
+  useEffect(() => {
+    const map = viewRef.current?.map;
+    if (!map) return;
+    const activeIds = new Set(geeMapLayers.map((layer) => layer.id));
+    for (const [id, layer] of geeOverlayLayersRef.current) {
+      if (!activeIds.has(id)) {
+        map.remove(layer);
+        geeOverlayLayersRef.current.delete(id);
+      }
+    }
+    for (const item of geeMapLayers) {
+      let layer = geeOverlayLayersRef.current.get(item.id);
+      if (!layer) {
+        layer = new WebTileLayer({
+          urlTemplate: item.urlTemplate,
+          title: item.title,
+          opacity: item.opacity,
+          minScale: item.minScale,
+          maxScale: item.maxScale,
+          visible: item.visible,
+        });
+        layer.watch('visible', (visible) =>
+          onGeeLayerVisibilityChangeRef.current(item.id, visible),
+        );
+        geeOverlayLayersRef.current.set(item.id, layer);
+        map.add(layer, item.id === 'composite_hazard_raster' ? 0 : undefined);
+      } else {
+        if (layer.urlTemplate !== item.urlTemplate) layer.urlTemplate = item.urlTemplate;
+        if (layer.visible !== item.visible) layer.visible = item.visible;
+      }
+    }
+  }, [geeMapLayers]);
 
   useEffect(() => {
     const view = viewRef.current;
@@ -488,14 +559,87 @@ export function AssetMap({
   useEffect(() => {
     const map = viewRef.current?.map;
     if (!map) return;
-    const activeIds = new Set(overlays.map((overlay) => overlay.id));
+    const activeIds = new Set(overlays.flatMap((overlay) =>
+      overlay.id === 'vulnerability_summaries'
+        ? [`${overlay.id}_county`, `${overlay.id}_ward`]
+        : [overlay.id],
+    ));
     for (const [id, layer] of overlayLayersRef.current) {
       if (!activeIds.has(id)) {
         map.remove(layer);
         overlayLayersRef.current.delete(id);
       }
     }
+    const ensureLayer = (id: string, title: string) => {
+      let layer = overlayLayersRef.current.get(id);
+      if (!layer) {
+        layer = new GraphicsLayer({ title });
+        overlayLayersRef.current.set(id, layer);
+        map.add(layer);
+      }
+      layer.title = title;
+      layer.removeAll();
+      return layer;
+    };
+    const addFeature = (layer: GraphicsLayer, overlay: MapOverlay, feature: GeoJsonCollection['features'][number]) => {
+      if (!feature.geometry) return;
+      const geometry = geometryFromGeoJson(feature.geometry);
+      if (!geometry) return;
+      const properties = feature.properties ?? {};
+      const id = String(feature.id ?? properties.energyAssetId ?? properties.administrativeUnitId ?? '');
+      const title = String(
+        properties.assetName ??
+          properties.name ??
+          (properties.level ? `${properties.level} ${properties.stableCode ?? ''}`.trim() : null) ??
+          properties.hazardType ??
+          overlay.title,
+      );
+      const popup = makePopup(
+        title,
+        {
+          ...properties,
+          featureId: feature.id ?? id,
+          ...(properties.energyAssetId
+            ? { __assetId: properties.energyAssetId }
+            : overlay.id === 'assets'
+              ? { __assetId: id, energyAssetId: id }
+              : {}),
+        },
+        ['assets', 'asset_exposure', 'asset_vulnerability', 'asset_criticality', 'interventions'].includes(
+          overlay.id,
+        )
+          ? (assetId) => onExploreAssetEvidenceRef.current(assetId)
+          : undefined,
+        overlay.id === 'vulnerability_summaries'
+          ? (level, unitId) => onExploreAreaEvidenceRef.current(level, unitId)
+          : undefined,
+      );
+      layer.add(new Graphic({
+        geometry,
+        symbol: symbolFor(overlay.id, properties, selectedId === id, feature.geometry),
+        attributes: popup.attributes,
+        popupTemplate: popup.popupTemplate,
+      }));
+    };
     for (const overlay of overlays) {
+      const features = overlay.collection?.features ?? [];
+      if (overlay.id === 'vulnerability_summaries') {
+        const countyLayer = ensureLayer(`${overlay.id}_county`, 'County vulnerability summaries');
+        countyLayer.visible = overlay.visible;
+        countyLayer.minScale = 0;
+        countyLayer.maxScale = 1500000;
+        const wardLayer = ensureLayer(`${overlay.id}_ward`, 'Ward vulnerability summaries');
+        wardLayer.visible = overlay.visible;
+        wardLayer.minScale = 1500000;
+        wardLayer.maxScale = 0;
+        for (const feature of features) {
+          const target = String(feature.properties?.level ?? '').toLowerCase() === 'county'
+            ? countyLayer
+            : wardLayer;
+          addFeature(target, overlay, feature);
+        }
+        continue;
+      }
       let layer = overlayLayersRef.current.get(overlay.id);
       if (!layer) {
         layer = new GraphicsLayer({ title: overlay.title });
@@ -505,47 +649,7 @@ export function AssetMap({
       layer.title = overlay.title;
       layer.visible = overlay.visible;
       layer.removeAll();
-      for (const feature of overlay.collection?.features ?? []) {
-        const geometry = geometryFromGeoJson(feature.geometry);
-        if (!geometry) continue;
-        const properties = feature.properties ?? {};
-        const id = String(feature.id ?? properties.energyAssetId ?? properties.administrativeUnitId ?? '');
-        const title = String(
-          properties.assetName ??
-            properties.name ??
-            (properties.level ? `${properties.level} ${properties.stableCode ?? ''}`.trim() : null) ??
-            properties.hazardType ??
-            overlay.title,
-        );
-        const popup = makePopup(
-          title,
-          {
-            ...properties,
-            featureId: feature.id ?? id,
-            ...(properties.energyAssetId
-              ? { __assetId: properties.energyAssetId }
-              : overlay.id === 'assets'
-                ? { __assetId: id, energyAssetId: id }
-                : {}),
-          },
-          ['assets', 'asset_exposure', 'asset_vulnerability', 'asset_criticality', 'interventions'].includes(
-            overlay.id,
-          )
-            ? (assetId) => onExploreAssetEvidenceRef.current(assetId)
-            : undefined,
-          overlay.id === 'vulnerability_summaries'
-            ? (level, unitId) => onExploreAreaEvidenceRef.current(level, unitId)
-            : undefined,
-        );
-        layer.add(
-          new Graphic({
-            geometry,
-            symbol: symbolFor(overlay.id, properties, selectedId === id, feature.geometry!),
-            attributes: popup.attributes,
-            popupTemplate: popup.popupTemplate,
-          }),
-        );
-      }
+      for (const feature of features) addFeature(layer, overlay, feature);
     }
   }, [overlays, selectedId]);
 

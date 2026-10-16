@@ -10,6 +10,7 @@ import {
 import {
   fetchAssetMapCollection,
   fetchGeoJsonLayer,
+  fetchGeeMapLayers,
   fetchLayers,
   fetchPriorities,
   fetchRasterRegistry,
@@ -238,6 +239,7 @@ export function MapPage() {
   const [region, setRegion] = useState<Region>(() =>
     searchParams.get('area') === 'kenya' ? 'kenya' : 'kano',
   );
+  const [geeLayerVisibility, setGeeLayerVisibility] = useState<Record<string, boolean>>({});
   const [basemapStyle, setBasemapStyle] = useState<BasemapStyle>('theme');
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const [visibleLayers, setVisibleLayers] = useState<LayerId[]>(defaultVisible);
@@ -259,6 +261,13 @@ export function MapPage() {
     queryKey: ['raster-registry'],
     queryFn: fetchRasterRegistry,
     retry: 0,
+  });
+  const geeMapLayersQ = useQuery({
+    queryKey: ['gee-map-layers'],
+    queryFn: fetchGeeMapLayers,
+    retry: 0,
+    staleTime: 8 * 60 * 1000,
+    refetchInterval: 30 * 60 * 1000,
   });
   const prioritiesQ = useQuery({
     queryKey: ['priorities'],
@@ -307,11 +316,16 @@ export function MapPage() {
     readinessQ.error,
     apiLayersQ.error,
     rasterRegistryQ.error,
+    geeMapLayersQ.error,
     prioritiesQ.error,
     ...layerQueries.filter((query) => query.isError).map((query) => query.error),
   ].find(Boolean);
   const storedLayers = normalizeLayers(apiLayersQ.data);
   const rasterEntries = rasterRegistryQ.data?.data ?? [];
+  const geeMapLayers = (geeMapLayersQ.data?.data ?? []).map((layer) => ({
+    ...layer,
+    visible: geeLayerVisibility[layer.id] ?? true,
+  }));
   const readiness = readinessQ.data;
   const checks = readiness?.checks;
   const environmentEvidence = checks?.environmentalEvidence ?? {};
@@ -321,6 +335,11 @@ export function MapPage() {
   const toggleLayer = (id: LayerId) => {
     setVisibleLayers((current) =>
       current.includes(id) ? current.filter((layer) => layer !== id) : [...current, id],
+    );
+  };
+  const setGeeLayerVisible = (id: string, visible: boolean) => {
+    setGeeLayerVisibility((current) =>
+      current[id] === visible ? current : { ...current, [id]: visible },
     );
   };
   const goToEvidence = () => {
@@ -339,6 +358,8 @@ export function MapPage() {
       <div className="risk-map-canvas">
         <AssetMap
           overlays={overlays}
+          geeMapLayers={geeMapLayers}
+          onGeeLayerVisibilityChange={setGeeLayerVisible}
           selectedId={selectedId}
           region={region}
           theme={theme}
@@ -535,12 +556,35 @@ export function MapPage() {
               </div>
             </calcite-block>
 
-            {rasterEntries.length > 0 && (
-              <calcite-block heading="Registered rasters" open>
+            {(rasterEntries.length > 0 || geeMapLayers.length > 0) && (
+              <calcite-block heading="Registered rasters & GEE layers" open>
+                {geeMapLayers.length > 0 && (
+                  <div className="layer-groups">
+                    <section className="layer-group">
+                      <h3>Live Earth Engine layers</h3>
+                      {geeMapLayers.map((layer) => (
+                        <calcite-label className="layer-toggle" key={layer.id}>
+                          <span className="layer-label">
+                            <span>{layer.title}</span>
+                            <small>{layer.id === 'composite_hazard_raster' ? 'Raster · opacity 65%' : 'GEE vector tiles'}</small>
+                          </span>
+                          <calcite-switch
+                            checked={layer.visible || undefined}
+                            label={layer.title}
+                            oncalciteSwitchChange={(event) =>
+                              setGeeLayerVisible(layer.id, Boolean((event.target as HTMLElement & { checked?: boolean }).checked))
+                            }
+                          />
+                        </calcite-label>
+                      ))}
+                    </section>
+                  </div>
+                )}
                 <div className="raster-legend-stack">
                   {rasterEntries.slice(0, 7).map((entry) => {
                     const unitText = Object.values(entry.units ?? {}).filter(Boolean).join(', ') || '—';
                     const palette = entry.style?.palette ?? [];
+                    const mappedLayer = layerDefinitions.find((layer) => layer.id === entry.mapLayer);
                     return (
                       <div key={entry.key} className="raster-legend-card">
                         <div className="raster-legend-header">
@@ -562,6 +606,19 @@ export function MapPage() {
                           <span>Period</span>
                           <strong>{entry.style?.observationPeriod ?? entry.temporalCoverage ?? 'Not specified'}</strong>
                         </div>
+                        {mappedLayer && (
+                          <calcite-label className="layer-toggle">
+                            <span className="layer-label">
+                              <span>Show map evidence</span>
+                              <small>Existing API layer; not a raw pixel query</small>
+                            </span>
+                            <calcite-switch
+                              checked={visibleLayers.includes(mappedLayer.id) || undefined}
+                              label={`Show ${mappedLayer.title}`}
+                              oncalciteSwitchChange={() => toggleLayer(mappedLayer.id)}
+                            />
+                          </calcite-label>
+                        )}
                       </div>
                     );
                   })}

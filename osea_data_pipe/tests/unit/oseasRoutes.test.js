@@ -19,6 +19,7 @@ test('root metadata identifies OSEAS and exposes integration readiness route', a
   assert.equal(response.status, 200);
   assert.equal(response.body.service, 'oseas-climate-risk-api');
   assert.equal(response.body.endpoints.oseas.readiness, '/api/v1/oseas/readiness');
+  assert.equal(response.body.endpoints.oseas.gee_map_layers, '/api/v1/oseas/gee-map-layers');
   assert.equal(response.body.endpoints.oseas.asset_vulnerability, '/api/v1/oseas/assets/{id}/vulnerability');
   assert.equal(response.body.endpoints.oseas.vulnerability_layer, '/api/v1/oseas/layers/asset_vulnerability/geojson');
   assert.equal(response.body.endpoints.oseas.prithvi_national_summaries, '/api/v1/oseas/layers/prithvi_national_summaries/geojson');

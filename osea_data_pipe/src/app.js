@@ -87,6 +87,7 @@ const getEngineInfo = (req, res) => {
         readiness: "/api/v1/oseas/readiness",
         catalog: "/api/v1/oseas/catalog",
         raster_registry: "/api/v1/oseas/raster-registry",
+        gee_map_layers: "/api/v1/oseas/gee-map-layers",
         assets: "/api/v1/oseas/assets",
         asset_vulnerability: "/api/v1/oseas/assets/{id}/vulnerability",
         asset_exposure: "/api/v1/oseas/assets/{id}/exposure",

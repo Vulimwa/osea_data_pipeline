@@ -71,6 +71,17 @@ export type RasterRegistryEntry = {
   } | null;
 };
 
+export type GeeMapLayer = {
+  id: string;
+  title: string;
+  assetId: string;
+  urlTemplate: string;
+  opacity: number;
+  minScale: number;
+  maxScale: number;
+  visible: boolean;
+};
+
 export type AssetProperties = {
   assetType?: string;
   name?: string | null;
@@ -362,6 +373,10 @@ export function fetchDatasetCatalog() {
 
 export function fetchRasterRegistry() {
   return getJson<{ data?: RasterRegistryEntry[]; count?: number; source?: string }>('/raster-registry');
+}
+
+export function fetchGeeMapLayers() {
+  return getJson<{ data?: GeeMapLayer[] }>('/gee-map-layers');
 }
 
 export function fetchAssetExposure(id: string) {

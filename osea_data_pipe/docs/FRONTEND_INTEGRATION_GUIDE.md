@@ -6,7 +6,7 @@ Base URL: `/api/v1/oseas`. Routes require a Supabase access token when `OSEAS_RE
 
 For unauthenticated production map access, set `OSEAS_PUBLIC_READ_API=true` on the backend. This exposes only read-only `GET` requests; all non-GET requests still require authentication.
 
-1. Call `GET /api/v1/oseas/layers/asset_exposure/geojson /readiness` and `GET /catalog` to show backend/schema state and source attribution.
+1. Call `GET /api/v1/oseas/layers/asset_exposure/geojson /readiness` and `GET /catalog` to show backend/schema state and source attribution. The map also calls `GET /api/v1/oseas/gee-map-layers` for short-lived tile templates generated server-side from the configured `projects/osea-hack/assets/composite_hazard_raster`, `kenya_wards_vulnerability_vector`, `vulnerable_minigrids_vector`, and `vulnerable_substations_vector` Earth Engine assets. The raster uses the multi-hazard palette and 0.65 opacity; vector tiles are styled by their vulnerability fields. This is display-only tile access; it does not provide feature attributes or raster pixel identify.
 2. Call `GET /layers` to enumerate map routes; stored derived layers report `queryable` without making a claim about whether rows exist. Request `?includeCounts=true` when exact `featureCount`, `hasData`, and `available`/`not_assessed` state are needed; map queries already return filtered totals.
 3. Load available source/reference features with `GET /layers/flood_reference/geojson?eventKey=...` or `GET /layers/hydrography/geojson?type=river|lake`.
 4. Load model candidates with `GET /layers/flood_candidate/geojson?bbox=west,south,east,north`.

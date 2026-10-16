@@ -9,6 +9,7 @@ router.use(supabaseBearerAuth);
 router.get('/readiness', controller.getReadiness);
 router.get('/catalog', controller.getCatalog);
 router.get('/raster-registry', controller.getRasterRegistry);
+router.get('/gee-map-layers', controller.getGeeMapLayers);
 router.get('/runs', controller.getRuns);
 router.get('/runs/:id', controller.getRun);
 router.get('/layers', controller.getLayers);

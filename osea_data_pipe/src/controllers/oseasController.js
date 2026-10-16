@@ -2,9 +2,12 @@
 
 const fs = require('fs');
 const path = require('path');
+const { execFile } = require('child_process');
+const { promisify } = require('util');
 const db = require('../repositories/db');
 const { AppError } = require('../middleware/errorHandler');
 const catalog = require('../../config/data_catalog.json');
+const execFileAsync = promisify(execFile);
 
 function resolveProjectRoot(moduleDirectory = __dirname) {
   const candidates = [
@@ -21,6 +24,9 @@ const windProducts = {
   air_density_10m: { file: 'air_density_10m_map.tif', unit: 'kg/m3', datasetKey: 'global_wind_atlas_air_density_10m' },
 };
 const windCacheDir = path.join(projectRoot, 'data/raw/global_wind_atlas/KEN');
+const geeMapLayersScript = path.join(projectRoot, 'scripts', 'get_gee_map_layers.py');
+let geeMapLayersCache = null;
+let geeMapLayersCacheExpiresAt = 0;
 const availableWindProducts = () => Object.entries(windProducts)
   .filter(([, product]) => fs.existsSync(path.join(windCacheDir, product.file)));
 const mapLayerSql = {
@@ -470,6 +476,37 @@ const getRasterRegistry = asyncRoute(async (_req, res) => {
   });
 });
 
+const getGeeMapLayers = asyncRoute(async (_req, res) => {
+  if (geeMapLayersCache && Date.now() < geeMapLayersCacheExpiresAt) {
+    return res.json(geeMapLayersCache);
+  }
+  const python = process.env.PYTHON_EXECUTABLE || process.env.PYTHON || 'python';
+  let stdout;
+  try {
+    ({ stdout } = await execFileAsync(python, [geeMapLayersScript], {
+      cwd: projectRoot,
+      timeout: 120000,
+      maxBuffer: 1024 * 1024,
+      windowsHide: true,
+    }));
+  } catch (error) {
+    console.error('Unable to prepare Earth Engine map layers', error.message);
+    throw new AppError(
+      'GEE_MAP_LAYERS_UNAVAILABLE',
+      'Earth Engine map layers could not be prepared; check backend Earth Engine credentials and asset access.',
+      503,
+    );
+  }
+  try {
+    geeMapLayersCache = JSON.parse(stdout);
+  } catch (error) {
+    console.error('Earth Engine map layer script returned invalid JSON', error.message);
+    throw new AppError('GEE_MAP_LAYERS_INVALID_RESPONSE', 'Earth Engine map layers returned an invalid response.', 502);
+  }
+  geeMapLayersCacheExpiresAt = Date.now() + 10 * 60 * 1000;
+  res.json(geeMapLayersCache);
+});
+
 const getReadiness = asyncRoute(async (_req, res) => {
   const database = await db.checkHealth();
   let sourceRun = null;
@@ -916,4 +953,4 @@ const getPriorities = asyncRoute(async (req, res) => {
   res.json({ data: result.rows.map((row) => ({ ...row, evidence: parseJson(row.evidence, {}), assumptions: parseJson(row.assumptions, {}) })), pagination: { limit, offset }, status: result.rows.length ? 'available' : 'not_assessed' });
 });
 
-module.exports = { getReadiness, getCatalog, getRasterRegistry, getRuns, getRun, getLayers, getFloodGeoJson, getHydrographyGeoJson, getFloodReferenceGeoJson, getMapOutputGeoJson, getPopulationExposureGeoJson, getWindResourceManifest, downloadWindResource, listAssets, getAssetExposure, getAssetVulnerability, getAssetCriticality, getAssetServiceDependencies, getAdminSummary, getPriorities, buildAssetListFilter, buildMapOutputFilter, mapAssetExposureRows, mapAssetVulnerabilityRows, buildStoredLayerEntries, resolveProjectRoot, windCacheDir };
+module.exports = { getReadiness, getCatalog, getRasterRegistry, getGeeMapLayers, getRuns, getRun, getLayers, getFloodGeoJson, getHydrographyGeoJson, getFloodReferenceGeoJson, getMapOutputGeoJson, getPopulationExposureGeoJson, getWindResourceManifest, downloadWindResource, listAssets, getAssetExposure, getAssetVulnerability, getAssetCriticality, getAssetServiceDependencies, getAdminSummary, getPriorities, buildAssetListFilter, buildMapOutputFilter, mapAssetExposureRows, mapAssetVulnerabilityRows, buildStoredLayerEntries, resolveProjectRoot, windCacheDir };
