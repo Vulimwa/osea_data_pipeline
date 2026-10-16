@@ -12,6 +12,7 @@ import {
   fetchGeoJsonLayer,
   fetchLayers,
   fetchPriorities,
+  fetchRasterRegistry,
   fetchReadiness,
   fetchReferenceLayer,
   KANO_BBOX,
@@ -254,6 +255,11 @@ export function MapPage() {
     retry: 0,
   });
   const apiLayersQ = useQuery({ queryKey: ['api-layers'], queryFn: fetchLayers, retry: 0 });
+  const rasterRegistryQ = useQuery({
+    queryKey: ['raster-registry'],
+    queryFn: fetchRasterRegistry,
+    retry: 0,
+  });
   const prioritiesQ = useQuery({
     queryKey: ['priorities'],
     queryFn: fetchPriorities,
@@ -300,10 +306,12 @@ export function MapPage() {
   const apiError = [
     readinessQ.error,
     apiLayersQ.error,
+    rasterRegistryQ.error,
     prioritiesQ.error,
     ...layerQueries.filter((query) => query.isError).map((query) => query.error),
   ].find(Boolean);
   const storedLayers = normalizeLayers(apiLayersQ.data);
+  const rasterEntries = rasterRegistryQ.data?.data ?? [];
   const readiness = readinessQ.data;
   const checks = readiness?.checks;
   const environmentEvidence = checks?.environmentalEvidence ?? {};
@@ -322,6 +330,9 @@ export function MapPage() {
   const groups = [...new Set(layerDefinitions.map((layer) => layer.group))];
   const selectedAssetType = String(selectedFeature?.properties?.assetType ?? 'Energy asset');
   const serverLayer = (id: LayerId) => storedLayers.find((layer) => layer.layer === id);
+  const rasterSummary = rasterEntries.length
+    ? `${rasterEntries.length.toLocaleString()} registered raster sources`
+    : 'No registered rasters';
 
   return (
     <main className="risk-map-page">
@@ -393,7 +404,7 @@ export function MapPage() {
               }
             }}
           >
-            <calcite-option value="theme">Canvas gray</calcite-option>
+            <calcite-option value="theme">OpenStreetMap</calcite-option>
             <calcite-option value="streets-vector">Streets</calcite-option>
             <calcite-option value="satellite">Imagery</calcite-option>
             <calcite-option value="topo-vector">Topographic</calcite-option>
@@ -453,6 +464,14 @@ export function MapPage() {
                     : currentExposure?.features.length
                       ? 'Asset-linked records'
                       : 'No records in this view'}
+                </span>
+              </calcite-block>
+              <calcite-block heading="Raster registry">
+                <strong>{rasterEntries.length ? countLabel(rasterEntries.length) : '0'}</strong>
+                <span>
+                  {rasterRegistryQ.isLoading
+                    ? 'Loading raster registry…'
+                    : rasterSummary}
                 </span>
               </calcite-block>
             </div>
@@ -515,6 +534,40 @@ export function MapPage() {
                 ))}
               </div>
             </calcite-block>
+
+            {rasterEntries.length > 0 && (
+              <calcite-block heading="Registered rasters" open>
+                <div className="raster-legend-stack">
+                  {rasterEntries.slice(0, 7).map((entry) => {
+                    const unitText = Object.values(entry.units ?? {}).filter(Boolean).join(', ') || '—';
+                    const palette = entry.style?.palette ?? [];
+                    return (
+                      <div key={entry.key} className="raster-legend-card">
+                        <div className="raster-legend-header">
+                          <strong>{entry.name}</strong>
+                          <span>{entry.retrievalStatus.replaceAll('_', ' ')}</span>
+                        </div>
+                        {palette.length > 0 && (
+                          <div className="raster-legend-swatches" aria-label={`${entry.name} legend`}>
+                            {palette.map((color) => (
+                              <span key={`${entry.key}-${color}`} style={{ background: color }} />
+                            ))}
+                          </div>
+                        )}
+                        <div className="raster-legend-meta">
+                          <span>Unit</span>
+                          <strong>{unitText}</strong>
+                        </div>
+                        <div className="raster-legend-meta">
+                          <span>Period</span>
+                          <strong>{entry.style?.observationPeriod ?? entry.temporalCoverage ?? 'Not specified'}</strong>
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+              </calcite-block>
+            )}
 
             <calcite-block heading="Area scan">
               <calcite-button

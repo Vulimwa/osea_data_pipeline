@@ -8,8 +8,10 @@ import Polyline from '@arcgis/core/geometry/Polyline';
 import Polygon from '@arcgis/core/geometry/Polygon';
 import Extent from '@arcgis/core/geometry/Extent';
 import Basemap from '@arcgis/core/Basemap';
-import TileLayer from '@arcgis/core/layers/TileLayer';
 import SketchViewModel from '@arcgis/core/widgets/Sketch/SketchViewModel';
+import Expand from '@arcgis/core/widgets/Expand';
+import LayerList from '@arcgis/core/widgets/LayerList';
+import Legend from '@arcgis/core/widgets/Legend';
 import PopupTemplate from '@arcgis/core/PopupTemplate';
 import * as geometryEngine from '@arcgis/core/geometry/geometryEngine';
 import SimpleMarkerSymbol from '@arcgis/core/symbols/SimpleMarkerSymbol';
@@ -61,16 +63,9 @@ function mapExtent(box: Bbox) {
   });
 }
 
-function mapBasemap(theme: Theme, style: BasemapStyle) {
-  if (style !== 'theme') return Basemap.fromId(style) ?? mapBasemap(theme, 'theme');
-  const prefix = 'https://services.arcgisonline.com/ArcGIS/rest/services/Canvas/';
-  const variant = theme === 'light' ? 'World_Light_Gray' : 'World_Dark_Gray';
-  return new Basemap({
-    baseLayers: [
-      new TileLayer({ url: `${prefix}${variant}_Base/MapServer` }),
-      new TileLayer({ url: `${prefix}${variant}_Reference/MapServer` }),
-    ],
-  });
+function mapBasemap(_theme: Theme, style: BasemapStyle) {
+  if (style !== 'theme') return Basemap.fromId(style) ?? mapBasemap(_theme, 'theme');
+  return Basemap.fromId('osm') ?? Basemap.fromId('streets-vector');
 }
 
 function geometryFromGeoJson(geometry: GeoJSON.Geometry | null | undefined) {
@@ -399,6 +394,19 @@ export function AssetMap({
       ui: { components: ['zoom', 'compass'] },
       popup: { dockEnabled: true, dockOptions: { position: 'bottom-right', breakpoint: false } },
     });
+    const layerListExpand = new Expand({
+      view,
+      content: new LayerList({ view }),
+      expandIcon: 'layers',
+      group: 'top-right',
+    });
+    const legendExpand = new Expand({
+      view,
+      content: new Legend({ view }),
+      expandIcon: 'legend',
+      group: 'top-right',
+    });
+    view.ui.add([layerListExpand, legendExpand], 'top-right');
     const sketch = new SketchViewModel({
       view,
       layer: selectionLayer,
@@ -449,6 +457,8 @@ export function AssetMap({
 
     return () => {
       sketch.destroy();
+      layerListExpand.destroy();
+      legendExpand.destroy();
       view.destroy();
       viewRef.current = null;
       selectionLayerRef.current = null;
@@ -488,7 +498,7 @@ export function AssetMap({
     for (const overlay of overlays) {
       let layer = overlayLayersRef.current.get(overlay.id);
       if (!layer) {
-        layer = new GraphicsLayer({ title: overlay.title, listMode: 'hide' });
+        layer = new GraphicsLayer({ title: overlay.title });
         overlayLayersRef.current.set(overlay.id, layer);
         map.add(layer);
       }

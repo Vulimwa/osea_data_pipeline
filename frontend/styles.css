@@ -521,6 +521,69 @@ calcite-shell {
   text-transform: capitalize;
 }
 
+.raster-legend-stack {
+  display: grid;
+  gap: 0.6rem;
+}
+
+.raster-legend-card {
+  display: grid;
+  gap: 0.45rem;
+  padding: 0.55rem 0.6rem;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--subtle-surface);
+}
+
+.raster-legend-header {
+  display: flex;
+  justify-content: space-between;
+  gap: 0.5rem;
+  align-items: center;
+}
+
+.raster-legend-header strong {
+  font-size: 0.8rem;
+}
+
+.raster-legend-header span {
+  color: var(--mist-dim);
+  font-size: 0.67rem;
+  text-transform: capitalize;
+}
+
+.raster-legend-swatches {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(18px, 1fr));
+  gap: 0.2rem;
+  height: 12px;
+  overflow: hidden;
+  border-radius: 999px;
+  border: 1px solid rgba(32, 35, 39, 0.08);
+}
+
+.raster-legend-swatches span {
+  display: block;
+  width: 100%;
+  height: 100%;
+}
+
+.raster-legend-meta {
+  display: flex;
+  justify-content: space-between;
+  gap: 0.5rem;
+  font-size: 0.72rem;
+}
+
+.raster-legend-meta span {
+  color: var(--mist-dim);
+}
+
+.raster-legend-meta strong {
+  font-size: 0.72rem;
+  text-align: right;
+}
+
 .evidence-caveat {
   margin: 0.55rem 0 0;
   font-size: 0.75rem;

@@ -86,6 +86,7 @@ const getEngineInfo = (req, res) => {
       oseas: {
         readiness: "/api/v1/oseas/readiness",
         catalog: "/api/v1/oseas/catalog",
+        raster_registry: "/api/v1/oseas/raster-registry",
         assets: "/api/v1/oseas/assets",
         asset_vulnerability: "/api/v1/oseas/assets/{id}/vulnerability",
         asset_exposure: "/api/v1/oseas/assets/{id}/exposure",

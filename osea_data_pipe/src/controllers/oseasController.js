@@ -233,6 +233,243 @@ function parseJson(value, fallback = null) {
   return typeof value === 'string' ? JSON.parse(value) : value;
 }
 
+const knownRasterStyles = {
+  oseas_active_fire_days_2025: {
+    key: 'oseas_active_fire_days_2025',
+    name: 'Active-fire frequency',
+    provider: 'OSEAS',
+    accessMethod: 'Raster service / map layer',
+    retrievalStatus: 'registered_live_layer',
+    spatialCoverage: 'Kenya / regional footprint',
+    temporalCoverage: '2025 observation period',
+    resolutionM: null,
+    units: { fire_frequency: 'days' },
+    bands: ['fire_frequency'],
+    purpose: 'Active-fire frequency context for infrastructure screening.',
+    layerType: 'raster',
+    palette: ['#fff7bc', '#fec44f', '#fe9929', '#ec7014', '#cc4c02', '#7f2704'],
+    min: 0,
+    max: 10,
+    valueType: 'continuous',
+    observationPeriod: '2025',
+    legendLabel: 'fire frequency (days)',
+  },
+  oseas_lst_day_mean_2025: {
+    key: 'oseas_lst_day_mean_2025',
+    name: 'Daytime LST',
+    provider: 'OSEAS',
+    accessMethod: 'Raster service / map layer',
+    retrievalStatus: 'registered_live_layer',
+    spatialCoverage: 'Kenya / regional footprint',
+    temporalCoverage: '2025 daytime mean',
+    resolutionM: null,
+    units: { lst: '°C' },
+    bands: ['daytime_lst'],
+    purpose: 'Daytime land surface temperature context for heat hazard screening.',
+    layerType: 'raster',
+    palette: ['#313695', '#74add1', '#abd9e9', '#ffffbf', '#fdae61', '#f46d43', '#a50026'],
+    min: 15,
+    max: 45,
+    valueType: 'continuous',
+    observationPeriod: '2025',
+    legendLabel: 'daytime LST (°C)',
+  },
+  oseas_ndvi_anomaly_2025: {
+    key: 'oseas_ndvi_anomaly_2025',
+    name: 'Vegetation anomaly (NDVI)',
+    provider: 'OSEAS',
+    accessMethod: 'Raster service / map layer',
+    retrievalStatus: 'registered_live_layer',
+    spatialCoverage: 'Kenya / regional footprint',
+    temporalCoverage: '2025 anomaly period',
+    resolutionM: null,
+    units: { ndvi_anomaly: 'dimensionless' },
+    bands: ['ndvi_anomaly'],
+    purpose: 'Vegetation anomaly context to distinguish stress and recovery states.',
+    layerType: 'raster',
+    palette: ['#a50026', '#f46d43', '#ffffbf', '#a6d96a', '#006837'],
+    min: -0.3,
+    max: 0.3,
+    valueType: 'continuous',
+    observationPeriod: '2025',
+    legendLabel: 'NDVI anomaly',
+  },
+  oseas_rainfall_annual_2025: {
+    key: 'oseas_rainfall_annual_2025',
+    name: 'Annual rainfall',
+    provider: 'OSEAS',
+    accessMethod: 'Raster service / map layer',
+    retrievalStatus: 'registered_live_layer',
+    spatialCoverage: 'Kenya / regional footprint',
+    temporalCoverage: '2025 annual accumulation',
+    resolutionM: null,
+    units: { rainfall: 'mm' },
+    bands: ['annual_rainfall'],
+    purpose: 'Observed annual rainfall accumulation for evidence review.',
+    layerType: 'raster',
+    palette: ['#8c510a', '#d8b365', '#f6e8c3', '#c7eae5', '#5ab4ac', '#01665e'],
+    min: 100,
+    max: 1800,
+    valueType: 'continuous',
+    observationPeriod: '2025',
+    legendLabel: 'rainfall (mm)',
+  },
+  oseas_rainfall_anomaly_2025: {
+    key: 'oseas_rainfall_anomaly_2025',
+    name: 'Rainfall anomaly',
+    provider: 'OSEAS',
+    accessMethod: 'Raster service / map layer',
+    retrievalStatus: 'registered_live_layer',
+    spatialCoverage: 'Kenya / regional footprint',
+    temporalCoverage: '2025 anomaly period',
+    resolutionM: null,
+    units: { rainfall_anomaly: 'mm' },
+    bands: ['rainfall_anomaly'],
+    purpose: 'Deviation from expected rainfall used with the matching baseline context.',
+    layerType: 'raster',
+    palette: ['#8c2d04', '#d94801', '#fdbb84', '#f7f7f7', '#9ecae1', '#3182bd', '#08519c'],
+    min: -600,
+    max: 600,
+    valueType: 'continuous',
+    observationPeriod: '2025',
+    legendLabel: 'rainfall anomaly (mm)',
+  },
+  oseas_rainfall_baseline_1991_2020: {
+    key: 'oseas_rainfall_baseline_1991_2020',
+    name: 'Rainfall baseline (1991-2020)',
+    provider: 'OSEAS',
+    accessMethod: 'Raster service / map layer',
+    retrievalStatus: 'registered_live_layer',
+    spatialCoverage: 'Kenya / regional footprint',
+    temporalCoverage: '1991-2020 climatology',
+    resolutionM: null,
+    units: { rainfall_baseline: 'mm' },
+    bands: ['rainfall_baseline'],
+    purpose: 'Benchmark rainfall climatology for anomaly interpretation.',
+    layerType: 'raster',
+    palette: ['#8c510a', '#d8b365', '#f6e8c3', '#c7eae5', '#5ab4ac', '#01665e'],
+    min: 100,
+    max: 1800,
+    valueType: 'continuous',
+    observationPeriod: '1991-2020',
+    legendLabel: 'baseline rainfall (mm)',
+  },
+  oseas_terrain_elevation: {
+    key: 'oseas_terrain_elevation',
+    name: 'Elevation',
+    provider: 'OSEAS',
+    accessMethod: 'Raster service / map layer',
+    retrievalStatus: 'registered_live_layer',
+    spatialCoverage: 'Kenya / regional footprint',
+    temporalCoverage: 'terrain baseline',
+    resolutionM: null,
+    units: { elevation: 'm' },
+    bands: ['elevation'],
+    purpose: 'Terrain elevation context for flood and access analyses.',
+    layerType: 'raster',
+    palette: ['#153b2e', '#4c956c', '#d9ed92', '#f6bd60', '#e76f51', '#f5f5f5'],
+    min: 0,
+    max: 3000,
+    valueType: 'continuous',
+    observationPeriod: 'terrain baseline',
+    legendLabel: 'elevation (m)',
+  },
+  oseas_terrain_slope: {
+    key: 'oseas_terrain_slope',
+    name: 'Terrain slope',
+    provider: 'OSEAS',
+    accessMethod: 'Raster service / map layer',
+    retrievalStatus: 'registered_live_layer',
+    spatialCoverage: 'Kenya / regional footprint',
+    temporalCoverage: 'terrain baseline',
+    resolutionM: null,
+    units: { slope: 'degrees' },
+    bands: ['slope'],
+    purpose: 'Terrain slope context for local drainage and placement screening.',
+    layerType: 'raster',
+    palette: ['#1a9850', '#91cf60', '#ffffbf', '#fc8d59', '#d73027'],
+    min: 0,
+    max: 35,
+    valueType: 'continuous',
+    observationPeriod: 'terrain baseline',
+    legendLabel: 'slope (degrees)',
+  },
+};
+
+function buildRasterRegistry(entries = catalog) {
+  const knownLayerRoutes = {
+    chirps_daily: '/api/v1/oseas/layers/rainfall/geojson',
+    nasa_viirs_black_marble_monthly: '/api/v1/oseas/layers/nightlights/geojson',
+    worldpop_global2_kenya_population_100m: '/api/v1/oseas/layers/population_exposure/geojson',
+    global_wind_atlas_wind_speed_10m: '/api/v1/oseas/layers/wind_resource',
+    global_wind_atlas_power_density_10m: '/api/v1/oseas/layers/wind_resource',
+    global_wind_atlas_air_density_10m: '/api/v1/oseas/layers/wind_resource',
+  };
+
+  const combinedEntries = new Map();
+
+  for (const source of Array.isArray(entries) ? entries : []) {
+    if (!source || typeof source !== 'object' || !source.key) continue;
+    combinedEntries.set(source.key, source);
+  }
+
+  for (const style of Object.values(knownRasterStyles)) {
+    const existing = combinedEntries.get(style.key);
+    combinedEntries.set(style.key, { ...(existing || {}), ...style, key: style.key });
+  }
+
+  return Array.from(combinedEntries.values())
+    .filter((source) => source && typeof source === 'object' && source.key)
+    .filter((source) => {
+      const text = [source.name, source.access_method, source.accessMethod, source.collection_id, source.collectionId, source.evidence_kind, source.purpose].filter(Boolean).join(' ').toLowerCase();
+      return /raster|geotiff|image collection|earth engine|daily aggregate|download|api|public .*download|collection|active-fire|temperature|ndvi|rainfall|elevation|slope/i.test(text);
+    })
+    .map((source) => {
+      const styleConfig = knownRasterStyles[source.key] || null;
+      const accessMethod = source.access_method || source.accessMethod || null;
+      const retrievalStatus = source.retrieval_status || source.retrievalStatus || 'registered';
+      const requiresCredentials = /account|credentials|blocked|selection.*required|api.*required/i.test(String(accessMethod || '') + ' ' + String(retrievalStatus));
+      const route = knownLayerRoutes[source.key] || null;
+      return {
+        key: source.key,
+        name: source.name || source.key,
+        provider: source.provider || null,
+        collectionId: source.collection_id || source.collectionId || null,
+        accessMethod,
+        retrievalStatus,
+        layerType: 'raster',
+        requiresCredentials,
+        mapLayer: route ? route.split('/').slice(-2, -1)[0] || null : null,
+        layerEndpoint: route,
+        serviceUrl: source.serviceUrl || null,
+        spatialCoverage: source.spatial_coverage || source.spatialCoverage || null,
+        temporalCoverage: source.temporal_coverage || source.temporalCoverage || null,
+        resolutionM: source.resolution_m ?? source.resolutionM ?? null,
+        units: source.units || styleConfig?.units || null,
+        bands: Array.isArray(source.bands) ? source.bands.slice() : Array.isArray(styleConfig?.bands) ? styleConfig.bands.slice() : [],
+        purpose: source.purpose || styleConfig?.purpose || null,
+        style: styleConfig ? {
+          min: styleConfig.min ?? null,
+          max: styleConfig.max ?? null,
+          palette: Array.isArray(styleConfig.palette) ? styleConfig.palette.slice() : [],
+          valueType: styleConfig.valueType || 'continuous',
+          observationPeriod: styleConfig.observationPeriod || null,
+          legendLabel: styleConfig.legendLabel || null,
+        } : null,
+      };
+    });
+}
+
+const getRasterRegistry = asyncRoute(async (_req, res) => {
+  const registry = buildRasterRegistry(catalog);
+  res.json({
+    data: registry,
+    count: registry.length,
+    generatedAt: new Date().toISOString(),
+    source: 'data_catalog',
+  });
+});
+
 const getReadiness = asyncRoute(async (_req, res) => {
   const database = await db.checkHealth();
   let sourceRun = null;
@@ -679,4 +916,4 @@ const getPriorities = asyncRoute(async (req, res) => {
   res.json({ data: result.rows.map((row) => ({ ...row, evidence: parseJson(row.evidence, {}), assumptions: parseJson(row.assumptions, {}) })), pagination: { limit, offset }, status: result.rows.length ? 'available' : 'not_assessed' });
 });
 
-module.exports = { getReadiness, getCatalog, getRuns, getRun, getLayers, getFloodGeoJson, getHydrographyGeoJson, getFloodReferenceGeoJson, getMapOutputGeoJson, getPopulationExposureGeoJson, getWindResourceManifest, downloadWindResource, listAssets, getAssetExposure, getAssetVulnerability, getAssetCriticality, getAssetServiceDependencies, getAdminSummary, getPriorities, buildAssetListFilter, buildMapOutputFilter, mapAssetExposureRows, mapAssetVulnerabilityRows, buildStoredLayerEntries, resolveProjectRoot, windCacheDir };
+module.exports = { getReadiness, getCatalog, getRasterRegistry, getRuns, getRun, getLayers, getFloodGeoJson, getHydrographyGeoJson, getFloodReferenceGeoJson, getMapOutputGeoJson, getPopulationExposureGeoJson, getWindResourceManifest, downloadWindResource, listAssets, getAssetExposure, getAssetVulnerability, getAssetCriticality, getAssetServiceDependencies, getAdminSummary, getPriorities, buildAssetListFilter, buildMapOutputFilter, mapAssetExposureRows, mapAssetVulnerabilityRows, buildStoredLayerEntries, resolveProjectRoot, windCacheDir };

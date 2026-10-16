@@ -43,6 +43,34 @@ export type LayerInfo = {
   evidenceKind?: string;
 };
 
+export type RasterRegistryEntry = {
+  key: string;
+  name: string;
+  provider: string | null;
+  collectionId: string | null;
+  accessMethod: string | null;
+  retrievalStatus: string;
+  layerType: 'raster';
+  requiresCredentials: boolean;
+  mapLayer: string | null;
+  layerEndpoint: string | null;
+  serviceUrl: string | null;
+  spatialCoverage: string | null;
+  temporalCoverage: string | null;
+  resolutionM: number | null;
+  units: Record<string, string> | null;
+  bands: string[];
+  purpose: string | null;
+  style?: {
+    min: number | null;
+    max: number | null;
+    palette: string[];
+    valueType?: string;
+    observationPeriod?: string | null;
+    legendLabel?: string | null;
+  } | null;
+};
+
 export type AssetProperties = {
   assetType?: string;
   name?: string | null;
@@ -330,6 +358,10 @@ export function fetchPriorities() {
 
 export function fetchDatasetCatalog() {
   return getJson<{ data?: Array<Record<string, unknown>>; count?: number }>('/catalog');
+}
+
+export function fetchRasterRegistry() {
+  return getJson<{ data?: RasterRegistryEntry[]; count?: number; source?: string }>('/raster-registry');
 }
 
 export function fetchAssetExposure(id: string) {
