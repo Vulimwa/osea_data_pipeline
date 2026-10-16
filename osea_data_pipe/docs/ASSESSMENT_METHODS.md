@@ -1,62 +1,70 @@
-# OSEAS assessment methods
+# Assessment methods
 
-## Organizer indicator status
+This document describes calculations that have an implemented processing path and separates them from exploratory prototypes and unimplemented indicators. A source appearing in the catalog does not mean that it has been processed. Check the latest run and readiness records before presenting an output as current.
 
-The statuses below use the audit vocabulary `PASS`, `PARTIAL`, `BLOCKED`, `NOT_IMPLEMENTED`, and `FAIL`. A proxy or route does not promote an indicator to `PASS`.
+## Evidence terms
 
-| Indicator | Status | Actual calculation/output | Data destination / API | Validation and known limitation |
-|---|---|---|---|---|
-| Flood Risk Exposure | `PARTIAL` | Sentinel-1 relative-backscatter threshold candidates and Sentinel-2 Prithvi water/flood candidates; positive geometry intersections are recorded as asset exposure. | `hazard_events`, `flood_extents`, `asset_hazard_exposure`, administrative summaries; `flood_candidate` and `asset_exposure` GeoJSON layers. | Localized pilot runs only; no Kenya-specific precision/recall/IoU or calibrated risk score. Candidate pixels are not confirmed inundation. |
-| Heat Stress Risk | `PARTIAL` | NASA POWER daily T2M_MAX, calendar-month baseline anomalies and configurable hot-day counts; nearest grid-cell asset screen. | `climate_observations`, heat events/exposure and summaries; climate/asset exposure layers. | Coarse (~50 km) near-surface air temperature, not Landsat LST or asset microclimate. No measured damage, outage or human-health outcome. |
-| Wildfire Exposure | `PARTIAL` | NASA FIRMS VIIRS active-fire points with acquisition metadata and optional point-to-asset distance. | `hazard_events`, `fire_events`, `asset_hazard_exposure`; `fire`/`asset_exposure` layers. | Active-fire proximity is not a perimeter, burned area or asset damage. A zero-detection query is not evidence of no fire. |
-| Infrastructure Criticality | `PARTIAL` | Evidence-gated records preserve asset attributes, verified relationships and missing inputs; the numeric score is withheld. | `asset_criticality_assessments`; asset criticality endpoint and layer. | No validated served-load, role, topology or redundancy inputs to support a national numeric score. |
-| Service Reliability Risk | `NOT_IMPLEMENTED` | No outage probability, failure forecast or reliability-risk score is calculated. Exposure/dependency evidence is not a reliability estimate. | No reliability-specific output contract; exposure and service-dependency endpoints expose only their own evidence. | Requires verified electrical topology and outage/failure/restoration history, with a validated model. |
-| Grid Resilience Scores | `PARTIAL` | Per-asset evidence dimensions include observed hazard exposure, verified alternative supply, topology, outage/restoration and service dependency; unknown dimensions stay unknown. | `grid_resilience_assessments`; `grid_resilience` GeoJSON layer. | Composite numeric score is withheld because redundancy, topology and operational history are not adequately supported. |
+- **Observation:** a source measurement such as daily rainfall or air temperature.
+- **Hazard candidate:** a location classified by a screening method as potentially affected.
+- **Exposure:** a measured spatial relationship between an asset and hazard evidence.
+- **Assessment:** an interpretation that depends on stated evidence and assumptions.
 
-## Current executable methods
+An empty query or missing assessment is not a measured zero. Each result should retain its period, source, method, coverage and processing run where the processor provides them.
 
-### Population exposure
+## Implemented or available processing paths
 
-WorldPop Global2 R2025A constrained 100 m population-count cells are summed by pixel center inside each UNOSAT event footprint. Each event’s overlapping source polygons count a cell once. County/ward summaries clip the source footprint to intersecting administrative geometries and retain valid-raster cell coverage. Output means estimated resident population inside a mapped footprint; it does not measure casualties, displacement, service dependency or confirmed impacts.
+### CHIRPS rainfall context
 
-### Heat
+The CHIRPS adapter calculates 30-day rainfall totals for dated flood-reference events and compares them with same-calendar 30-day windows from 2001–2020. It persists the total, absolute anomaly and percentage anomaly for county/ward intersections. Percentage anomaly is null if the baseline total is zero. The result describes rainfall context; it is not a mapped flood extent or asset-damage estimate.
 
-NASA POWER daily T2M_MAX is acquired over the bounded Kenya extent using the provider’s regional grid. Each daily value is compared with the mean monthly T2M_MAX for the same calendar month across 2001–2020. A configurable threshold yields hot-day counts and a nearest-grid-cell (within 45 km) asset exposure screen. Results are gridded near-surface air temperature and monthly-baseline anomalies. They are not land-surface temperature, asset microclimate, equipment damage or outage probabilities. API output is source-version hashed; repeated identical input is deduplicated.
+### NASA POWER heat context
 
-### Fire
+The heat adapter uses daily maximum 2 m air temperature (`T2M_MAX`), compares each day with the mean for the corresponding calendar month over 2001–2020, and can count days above a configured threshold. Asset context uses the nearest provider grid cell within the configured search distance. NASA POWER is coarse gridded near-surface air temperature, not land-surface temperature, equipment temperature, damage or outage probability.
 
-NASA FIRMS VIIRS detections are retained as point events with sensor/acquisition metadata and the source confidence category. Latest-day NRT results are requested inside the Kenya county-boundary envelope and then clipped to the exact boundary union; optional historical date pairs use the same AOI. Optional asset exposure is point-to-asset distance within configured kilometers. The result means proximity to a satellite active-fire detection; it is not a fire perimeter, burned area, confirmed asset impact or proof of no fire. A burned-area product remains separate work.
+### VIIRS nighttime radiance
 
-### Nighttime lights and human-activity context
+The Black Marble adapter screens daily VNP46A2 imagery using its quality flag, creates monthly medians, and compares a selected recent period with a baseline period. It records valid observations so a true zero can be distinguished from missing or invalid data. Administrative values use polygon summaries; asset and service context uses a documented buffer. Radiance is a human-activity context signal, not proof of electricity access, feeder connection, outage or damage.
 
-NASA VIIRS Black Marble VNP46A2 daily radiance is read from the public Earth Engine catalog. The adapter masks to `Mandatory_Quality_Flag == 0` (high-quality persistent lights), computes the monthly median from available daily images, and summarizes 36 complete recent months against a separately recorded January 2012-December 2015 baseline. January 2012 is partial because the collection begins on January 19. Percent change is calculated only when the baseline median is nonzero. Missing/invalid months do not become zero; valid-month coverage and valid pixel counts accompany the estimate. A mapped zero is retained only when the explicit valid-observation band shows at least one valid contributor. Counties/wards use polygon zonal statistics. Energy assets and critical services use a documented 500 m buffer around a representative point to contextualize nearby lights. The data are not electricity access, feeder linkage, outage duration, energy use, or proof of damage. Source image counts and selected dates are stored in provenance. NASA's file product defines a 0.1 scale factor; Earth Engine catalog values are already exposed in the documented radiance unit and are not scaled a second time. [NASA VNP46A2 filespec](https://ladsweb.modaps.eosdis.nasa.gov/filespec/VIIRS/2/VNP46A2_v2.0.fs), [Earth Engine catalog](https://developers.google.com/earth-engine/datasets/catalog/NASA_VIIRS_002_VNP46A2)
+The adapter and persistence workflow exist, but the latest accepted data state must be confirmed from the live run records. Do not rely on an old local log as evidence of a completed run.
 
-### Criticality and service dependencies
+### FIRMS active-fire detections
 
-Only explicitly verified `service_dependencies` relationships count as verified downstream-service context. Candidate relationships remain candidates; asset proximity does not create electrical connectivity. The engine stores source asset attributes and relationship evidence but does not calculate a numeric criticality score without validated topology, served load, redundancy and defensible normalization.
+The adapter requests NASA FIRMS active-fire detections for the selected sensor/date window, clips the results to Kenya administrative coverage, and can measure proximity to assets. A detection is not a fire perimeter, burned area or confirmed impact. Zero detections do not prove that no fire occurred.
 
-### Vulnerability and resilience
+### WorldPop population exposure
 
-The engine carries measured hazard exposure into asset vulnerability context and records missing sensitivity/adaptive-capacity evidence. It withholds a comprehensive vulnerability score until those inputs exist. Resilience is reported per evidence dimension (hazard exposure, verified alternative supply, topology, outage/restoration and service dependency). Unknown dimensions stay unknown; no composite resilience score is emitted.
+The WorldPop workflow sums valid population-count cells whose centers fall within a flood-reference footprint. It can also summarize intersections with county and ward boundaries. Provenance includes the source raster checksum, reference year and valid-raster coverage. Values are estimated residents in the footprint, not confirmed affected people, displacement, or population served by a particular energy asset.
 
-The same run writes a current ward and county summary and exposes it through `vulnerability_summaries` and the administrative-summary endpoint. It includes the number of assigned assets, per-asset type counts, observed hazard-exposure denominators, hazard-specific counts, and the number of composite scores withheld. `systemClassCounts` separates known centralized network classes and decentralized mini-grids, with distribution assets, generation assets, and unclassified asset types kept distinct. This is an inventory-class grouping, not a finding about feeder connectivity or islanding. A summary is `partial` when measured exposure evidence exists, `unknown` when assets exist but no measured exposure is available, and `not_assessed` when no assets are assigned. These are screening summaries, not validated vulnerability scores.
+### Sentinel-1 flood screening
 
-### Intervention output
+The bounded Sentinel-1 workflow compares event-window VV backscatter with a same-orbit baseline, applies terrain and persistent-water screens, then extracts connected candidate areas and measures positive intersections with inventory assets. Output is modeled flood-candidate evidence. It has not been calibrated as a flood probability or validated nationally against independent reference labels.
 
-Assets with measured `exposed` records can receive an unranked field-verification/engineering-review candidate. It uses the exposure record IDs as evidence. It does not estimate intervention impact, avoided loss, cost or benefit.
+### Prithvi flood/water segmentation
 
-## Idempotency and history
+The configured Prithvi-EO Sen1Floods11 checkpoint classifies Sentinel-2 optical input into water/flood candidate pixels. The pipeline applies validity and persistent-water masks, then stores candidate geometries or administrative pixel summaries depending on the run mode. Kenya-specific accuracy has not been established; see [`MODEL_CARD.md`](MODEL_CARD.md).
 
-Source-feature IDs and observed source identifiers are stable. Raster-based population assessment IDs incorporate the WorldPop checksum and flood-reference geometry fingerprint. Assessment IDs incorporate canonical input evidence hashes. An identical rerun does not duplicate an output row; changed source content receives a distinct identity. Run rows and source-version rows capture acquisition/processing history. Coverage rows are run-scoped evidence.
+## Exposure, vulnerability, criticality and resilience
 
-## Explicitly outstanding
+Exposure is recorded when the implemented spatial method finds a positive relationship between an asset and hazard evidence. Its meaning depends on the hazard geometry, observation period, spatial coverage and processing method.
 
-The current implementation has CHIRPS event-window rainfall totals and anomalies; standalone continuous rainfall/extreme-rainfall products and ERA5-derived indicators are outstanding. Reusable terrain/drainage/flow-accumulation products, Landsat LST composites, MODIS/Copernicus burned-area outputs, verified feeder topology, outage/reliability modelling, validated numeric criticality/vulnerability/resilience scores and intervention-benefit estimates are also outstanding. Black Marble has a configured resumable adapter, but this audit found no persisted `oseas_viirs_black_marble` run; see [`IMPLEMENTATION_STATUS.md`](IMPLEMENTATION_STATUS.md). Kenya-specific flood precision/recall/IoU requires compatible aligned reference labels and has not been performed.
+Production OSEAS assessments do not currently infer a general numeric vulnerability, criticality or resilience score when required evidence is missing. Relevant gaps include asset condition/sensitivity, served load, validated network topology, redundancy, outage/restoration history and verified service dependencies. Such dimensions remain unknown or withheld.
 
-## Status meanings
+County and ward summaries report inventory and evidence counts, denominators, status and provenance where available. They are screening summaries, not validated composite risk scores. An asset's proximity to a service does not establish that it supplies that service.
 
-- `READY`: executed and persisted with checked outputs.
-- `READY_WITH_LIMITATIONS`: executable evidence workflow with known coverage, scale or validation limits.
-- `BLOCKED`: a required credential, configured period or external source is missing.
-- `NOT_IMPLEMENTED`: no complete acquisition-to-persistence path exists.
-- `not_validated` is execution metadata and never means scientific validation.
+Measured exposure may support an unranked recommendation for field verification or engineering review. OSEAS does not calculate intervention effectiveness, avoided losses, cost-effectiveness or benefit without supporting methods and data.
+
+## CGF-ACI prototype
+
+The separate hackathon Earth Engine script defines **Cascade Grid Failure and Asset Criticality Index (CGF-ACI)** as an exploratory screening formula:
+
+1. Reduce 2025 CHIRPS daily precipitation to its 95th percentile and ERA5-Land 2 m temperature to its maximum.
+2. Independently min-max normalize both surfaces over the Kenya boundary to 0–1.
+3. Form a composite: `0.6 × normalized rainfall + 0.4 × normalized heat`.
+4. Sample the composite at assets and multiply by an assumed asset-type factor: 0.95 for power stations, 0.85 for substations, and 0.50 for other types in the supplied script.
+5. Average intersecting substation scores within each ward.
+
+The index helps visualize where the selected climate signals and mapped energy assets overlap, compare broad ward patterns, and direct follow-up investigation. It is not a probability of grid failure or an estimate of outages. The weights are assumptions, the model has no electrical topology or failure history, min-max normalization depends on the selected area and outliers, and a ward mean can conceal individual high values. A 100 m sampling request does not increase the native climate resolution. Rainfall intensity is not flood inundation.
+
+## Outstanding methods
+
+The repository does not provide validated national estimates of asset failure probability, outage duration, electrical cascade propagation, feeder-level reliability, or intervention benefit. Broad ERA5 climate indicators, Landsat land-surface temperature, burned-area exposure, future-climate projections and comprehensive raster zonal summaries require additional source-specific implementation and validation.

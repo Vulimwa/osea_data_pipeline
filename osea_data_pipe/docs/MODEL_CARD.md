@@ -1,42 +1,39 @@
-# OSEAS model and method card
+# Model card: flood screening
 
-## Current flood baseline
+OSEAS contains two flood/water candidate workflows. Both are screening tools. Neither is currently a validated national flood map, calibrated probability of inundation, or estimate of asset damage.
 
-- **Name/version:** `oseas-s1-relative-backscatter-screen-v2`
-- **Task:** bounded event-window flood candidate screening around a caller-provided Kenya-area bounding box.
-- **Inputs:** Earth Engine `COPERNICUS/S1_GRD` VV dB images; caller-selected event and baseline dates; one matching `ASCENDING` or `DESCENDING` orbit pass; Copernicus DEM GLO-30 slope; JRC Global Surface Water occurrence; CHIRPS rainfall as context.
-- **Processing:** event and baseline VV medians, 20 m focal median, candidate if event VV is below -16 dB and change is below -3 dB, slope below 5°, JRC occurrence below 80%, at least five connected pixels, and vector patch area at least 10,000 m². Thresholds and orbit are CLI parameters and are stored in run provenance. A same-orbit collection must cover >=70% of the ROI in both windows.
-- **Output:** polygons labeled `unvalidated_flood_candidate`; `hazard_events.evidence_kind='modeled'`; positive intersecting assets receive `asset_hazard_exposure` rows. Administrative output counts candidates and does not calculate vulnerability or a risk score.
-- **Permanent-water handling:** JRC surface-water occurrence is masked. If the configured Kenya lake vector asset is available, mapped lake surfaces are also excluded as permanent water. Rivers are not buffered/masked because genuine floodplain inundation can occur beside a river.
-- **Reference evidence:** the Nov 2023 Kenya flood source is stored separately as reference observation evidence for later comparison. Its presence alone is not an independent label validation, and event-level reported area/population are not substituted for geometry-measured areas.
-- **Spatial limit:** maximum 1,000 km² per run, 500 output polygons, and 45 days per image window. Larger areas need tiled/export-based processing.
-- **Validation:** the supplied November 2023 Kenya reference polygons are now registered and awaiting database ingestion. They were not used to validate existing candidate runs; no precision, recall, IoU, or calibrated confidence is reported.
-- **Known limitations:** dark surfaces, wet soil, terrain/shadow effects, vegetation, wind roughening, tidal/inland water changes and differing acquisition conditions can produce omission or commission errors. JRC masks persistent water only through 2021. CHIRPS does not validate inundation. The 30 m DEM is a surface model and slope filter, not hydraulic simulation.
-- **Missing-data behavior:** empty S1 windows, insufficient spatial coverage, unavailable DEM/JRC, or invalid periods fail the run; there is no synthetic fallback. Empty candidate output is stored as a completed screening with a quality warning and is not represented as zero risk.
+## Sentinel-1 relative-backscatter screen
 
-## Prithvi-EO Sen1Floods11 flood segmentation
+**Purpose:** identify candidate flood-like areas for review in a bounded event and baseline window.
 
-- **Checkpoint:** `ibm-nasa-geospatial/Prithvi-EO-2.0-300M-TL-Sen1Floods11`, pinned to revision `91ce9d38086a80b078a192b374df758b8855b732`.
-- **License/task:** Apache-2.0; flood/water segmentation fine-tuned on Sen1Floods11.
-- **Input:** Sentinel-2 L1C, six channels in the checkpoint's expected order: Blue, Green, Red, narrow NIR, SWIR1 and SWIR2 (Earth Engine bands B2, B3, B4, B8A, B11 and B12). The pipeline fetches imagery from Earth Engine and invokes the model repository's inference runner; Sentinel-1 SAR is not passed to this optical model. Validity, JRC occurrence and (when configured) mapped-lake masks are auxiliary bands and are not model inputs.
-- **Outputs:** class 1 is stored as `water_or_flood_candidate` modeled evidence, then intersected with energy assets and summarized by ward/county. A boundary is marked screened only when the AOI covers it completely; a partially covered unit is recorded as insufficient data. JRC Global Surface Water occurrence >=80% and configured mapped-lake pixels are filtered after inference; missing JRC occurrence is kept with permanence unknown. Outputs are screening candidates and are not proof of an asset failure or flood damage.
-- **Run limits:** 5 km² AOI, 45-day image window, bounded scene download, maximum 500 retained polygons. CPU inference is supported but slower.
-- **Validation:** real Kenya inference and geospatial validation ran for Garissa processing run `6860135c-5c64-4b9a-bfdb-b9f30a505b93`. It generated five polygons on 2024-04-29, with zero candidate intersections across 11 inventory assets in the pilot AOI. The AOI touches Garissa and Tana River counties and Galbet and Iftin wards; it does not cover any full administrative unit. No independent pixel reference or conventional-baseline comparison was used. The supplied November 2023 reference event is a different date and remains un-ingested, so Kenya precision/recall/IoU remain unevaluated and `validated_for_kenya=false`. See [`PRITHVI_KENYA_VALIDATION.md`](PRITHVI_KENYA_VALIDATION.md).
-- **Setup/runtime check:** `npm run oseas:prithvi:setup` downloads and verifies the pinned files, then automatically runs the official sample inference smoke test. The test passed on CPU in this environment. Runtime initializes from the task checkpoint weights and does not fetch the separate foundation checkpoint. This smoke test is not Kenya validation or OSEAS hazard output.
-- **Run:** after applying the current schema and completing inventory ingestion, run `npm run oseas:prithvi:flood -- --bbox <west> <south> <east> <north> --event-start YYYY-MM-DD --event-end YYYY-MM-DD`.
+**Inputs:** Earth Engine Sentinel-1 VV backscatter, explicit event and baseline dates, a matching orbit pass, Copernicus DEM slope, JRC Global Surface Water occurrence, and optional mapped lake polygons. CHIRPS rainfall may be stored as event context; it is not the classifier.
 
-## Nationwide tiled inference
+**Method:** compare event and baseline VV medians, apply configured backscatter/change thresholds, remove steep terrain and persistent water, and filter connected patches by size. The processor requires same-orbit image coverage of at least 70% in each period.
 
-- **Entry point:** `npm run oseas:prithvi:national`, also invoked by `npm run oseas:run` when Prithvi event dates are configured.
-- **Model input size:** the pinned inference implementation uses 512×512 windows. At the worker's 10 m grid resolution, each chip is 5.12 km square. The worker defaults to 64 pixels of overlap, leaving a 448×448 core for pixel counting; it does not send 256×256 chips to this checkpoint.
-- **Acquisition and storage:** Earth Engine selects and prepares one Sentinel-2 chip at a time. The chip is downloaded to a temporary local directory for the local checkpoint inference and deleted when that tile completes. No country-size source or prediction raster is written. The persisted map output is administrative candidate-pixel and coverage summaries, not a per-pixel raster layer.
-- **Resumption and scale:** tiles are keyed by event fingerprint and status in PostGIS. Failed/pending work can be retried by rerunning with the same inputs; `OSEAS_PRITHVI_NATIONAL_MAX_TILES=1` supports a small smoke run before removing the cap. A full nationwide run may involve many thousands of tiles and can take a long time, particularly on CPU.
-- **Reporting:** query `/api/v1/oseas/layers/prithvi_national_summaries/geojson` for map-ready ward/county results, optionally filtering `eventFingerprint`; `/api/v1/oseas/administrative/{ward|county}/{id}/summary` also includes pixel statistics for national Prithvi records. Missing/low-coverage units remain `insufficient_data`; class 1 remains unvalidated water/flood candidate evidence.
+**Output:** modeled candidate polygons and positive geometric intersections with energy assets. Output records preserve method and run provenance.
 
-The model bundle is downloaded from the [official Hugging Face model repository](https://huggingface.co/ibm-nasa-geospatial/Prithvi-EO-2.0-300M-TL-Sen1Floods11). Checkpoint availability does not constitute local accuracy validation. Compare against an independent, held-out reference set and the Sentinel-1 threshold baseline before operational use.
+**Operational limit:** bounded to at most 1,000 km², 45 days per image window and 500 output polygons per run. Use tiling or a separately designed batch workflow for larger areas.
 
-This configured checkpoint only produces the flood/water segmentation described above. It is not a burn-scar or land-cover-change checkpoint. Wildfire and environmental-change products need their own task-compatible checkpoint or conventional remote-sensing baseline, plus Kenya-specific validation; this pipeline does not label those hazards from the flood output.
+**Limitations:** radar response can vary with soil moisture, vegetation, terrain, wind, acquisition geometry and surface type. Water masks can be incomplete or stale. A candidate is not confirmed inundation. No Kenya-wide precision, recall, IoU, or calibrated confidence has been established.
 
-## Other indicators
+## Prithvi-EO Sen1Floods11
 
-Heat stress, wildfire exposure, vulnerability, infrastructure criticality, service reliability and grid resilience are **not assessed** by this implementation. Source registry entries do not constitute a model or score.
+**Purpose:** generate water/flood candidate evidence from optical imagery using a task-specific segmentation model.
+
+**Checkpoint:** `ibm-nasa-geospatial/Prithvi-EO-2.0-300M-TL-Sen1Floods11`, pinned in the implementation to revision `91ce9d38086a80b078a192b374df758b8855b732`.
+
+**Input:** six Sentinel-2 L1C optical bands in checkpoint order: Blue, Green, Red, narrow NIR, SWIR1 and SWIR2 (B2, B3, B4, B8A, B11 and B12). Validity and persistent-water masks are auxiliary processing inputs, not model channels.
+
+**Output:** class-1 water/flood candidates, followed by spatial exposure intersections and/or county/ward candidate-pixel and coverage summaries. Bounded pilot and nationwide tiled modes persist different output forms; nationwide output is administrative summaries rather than a retained national prediction raster.
+
+**Run limits:** bounded pilots cover at most 5 km² and use an explicit image period. Nationwide processing uses resumable 512×512 chips at 10 m with an overlap so only each non-overlapping core contributes to counts. It may take many hours, particularly on CPU.
+
+**Validation:** a checkpoint setup smoke test confirms the inference package can run on its sample. That is not geographic validation. Kenya-specific independent precision, recall and IoU have not been established. See [`ASSESSMENT_METHODS.md`](ASSESSMENT_METHODS.md) for interpretation requirements.
+
+## CGF-ACI is a separate prototype
+
+The hackathon CGF-ACI (Cascade Grid Failure and Asset Criticality Index) script is not the Prithvi model and is not a production OSEAS score. It combines min-max normalized 2025 CHIRPS 95th-percentile rainfall and ERA5-Land maximum temperature at 60/40 weights, applies assumed asset-type multipliers, and averages substation values by ward. It may help direct exploratory investigation, but it is not a failure probability. The method has no validated topology, outage history, calibrated asset weights or independent outcome validation. See [`ASSESSMENT_METHODS.md`](ASSESSMENT_METHODS.md).
+
+## Use and reporting
+
+Always report the source period, spatial coverage, run status and candidate status. Do not present an empty result as proof of no flood, a screening candidate as confirmed inundation, or an asset intersection as failure or outage. Check the latest run and data-quality records before using any output.
