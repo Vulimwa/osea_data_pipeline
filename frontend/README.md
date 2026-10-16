@@ -1,41 +1,41 @@
-# OSEAS Frontend
+# OSEAS map application
 
-This folder is the standalone React frontend. The backend API and national data pipeline live separately in [`../osea_data_pipe`](../osea_data_pipe). The app uses ArcGIS Maps SDK for JavaScript and Calcite Components. Light mode is the default; the header toggle switches to dark mode, and the selection is saved in the browser.
+This is the React frontend for OSEAS. It uses the ArcGIS Maps SDK for JavaScript and Calcite Components to display OSEAS API layers, asset and administrative evidence, and map controls. The map defaults to OpenStreetMap; it does not connect directly to Earth Engine or PostgreSQL.
 
 ## Pages
 
 | Route | Purpose |
 | --- | --- |
-| `/` | Map-first climate and energy risk view |
-| `/map` | ArcGIS map with Kenya-wide and Kano pilot views |
+| `/` and `/map` | Interactive Kenya and Kano pilot map |
 | `/briefing` | Project briefing |
-| `/evidence/:assetId` | Asset exposure and vulnerability evidence |
+| `/evidence/:assetId` | Asset evidence |
+| `/evidence/area/:level/:unitId` | County or ward evidence |
 
-## Run locally
+## Local development
 
 ```powershell
 cd frontend
-npm install
+npm ci
 npm run dev
 ```
 
-Open **http://localhost:5173/**. By default, Vite proxies API requests to the deployed Render API at `https://osea-data-pipeline.onrender.com`. To use a local backend instead, set the proxy target before starting Vite:
+Open `http://localhost:5173`. The Vite configuration proxies API requests to the configured target. The default target is `https://osea-data-pipeline.onrender.com`; point it at a local API when needed:
 
 ```powershell
 $env:VITE_API_PROXY_TARGET = "http://127.0.0.1:3000"
 npm run dev
 ```
 
-The browser reads the OSEAS API without user sign-in. This requires the backend's explicitly enabled public read-only mode; see the backend setup notes below. No Supabase credentials are needed in the frontend.
+The browser uses the OSEAS read API. No database password, Earth Engine credential, or Supabase service-role key belongs in frontend configuration. Production API access is controlled by the backend's bearer-token policy or its explicit public-read setting.
 
-## Deploy to Vercel (manual)
+## Build
 
-Create a Vercel project for this repository and set its **Root Directory** to `frontend`. Vercel uses [`vercel.json`](./vercel.json) to run `npm run build`, publish `dist`, forward `/api/*` to `https://osea-data-pipeline.onrender.com`, and route frontend paths to the app shell.
+```powershell
+npm run build
+```
 
-In Vercel **Project → Settings → Environment Variables**, add:
+This runs the TypeScript check and creates the production bundle in `dist/`.
 
-| Variable | Value | Required |
-| --- | --- | --- |
-No Vercel environment variables are required for API access. `VITE_API_PROXY_TARGET` is only read by the local Vite dev server; Vercel's API rewrite is configured in `vercel.json`.
+## Deployment
 
-On the backend host (Render), set `OSEAS_PUBLIC_READ_API=true` to allow unauthenticated `GET` requests to the read-only OSEAS routes. Non-GET requests remain protected, and the flag is off by default. Keep `SUPABASE_SERVICE_ROLE_KEY` and the database URL only in backend secrets. This setup does not deploy the app.
+For Vercel, set the project root to `frontend`; the repository's `frontend/vercel.json` describes the build and API rewrites. Configure the backend's allowed CORS origin and authentication separately. See the backend [`docs/SETUP.md`](../osea_data_pipe/docs/SETUP.md) and [`docs/FRONTEND_INTEGRATION_GUIDE.md`](../osea_data_pipe/docs/FRONTEND_INTEGRATION_GUIDE.md).
