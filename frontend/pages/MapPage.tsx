@@ -289,7 +289,7 @@ export function MapPage() {
   });
   const geeMapLayersQ = useQuery({
     queryKey: ['gee-map-layers'],
-    queryFn: fetchGeeMapLayers,
+    queryFn: () => fetchGeeMapLayers(),
     retry: 0,
     staleTime: 8 * 60 * 1000,
     refetchInterval: 30 * 60 * 1000,
