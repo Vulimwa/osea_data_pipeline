@@ -1,45 +1,52 @@
-# OSEAS backend architecture
+# OSEAS architecture
 
-## Implemented flow
+OSEAS turns source datasets into traceable spatial evidence. Processing is separated from presentation: Python and Earth Engine jobs write durable results to PostgreSQL/PostGIS; the Express API reads and serves those results; the React application displays them using the ArcGIS Maps SDK.
 
-The source inventory also includes Kenya rivers/lakes and the separate Nov 2023 reference flood layer. Those sources have dedicated PostGIS tables and GeoJSON endpoints. Sentinel-1 and Prithvi supplement JRC permanent-water handling with mapped lake polygons when the lake asset is configured; rivers remain context to avoid masking actual floodplain inundation.
+## Data flow
 
 ```text
-Configured Earth Engine feature assets
-  -> paged, batched, idempotent source ingestion (oseas.ingest)
-  -> PostGIS energy assets, services, administrative boundaries, run/version/quality records
-  -> boundary assignment (point covered-by; line/polygon intersection measures)
-  -> explicit bounded event-window flood screen
-       Sentinel-1 VV event median vs same-orbit baseline median
-       + slope and JRC persistent-water masks
-       + CHIRPS rainfall context
-  -> modeled candidate polygons and positive asset intersections in PostGIS
-  -> ward/county screening counts with explicit method and run provenance
-  -> read-only Express endpoints and GeoJSON
+Earth Engine assets ─┐
+Climate APIs/raster ─┼─> audit and source adapters
+Reference datasets ──┘           |
+                                 v
+                    Earth Engine / Python GIS processing
+                                 |
+                                 v
+   PostgreSQL/PostGIS: source inventory, boundaries, evidence,
+   exposure, processing runs, versions, coverage and quality
+                                 |
+                                 v
+          Express read API: /api/v1/oseas/*
+                                 |
+                                 v
+          React + ArcGIS Maps SDK frontend
 ```
 
-Raster work runs in Earth Engine. The backend only retrieves bounded vector candidates (maximum 1,000 km² and 500 polygons per run) and writes those plus asset intersections to PostGIS. It does not download full raster collections into application memory. Larger national analysis needs a tile/export and object-storage design before operation.
+## Main components
 
-## Ingestion and idempotency
+- **Source registry:** `config/data_catalog.json` describes provider, access method, units, periods, spatial coverage, attribution and retrieval state. Registry presence does not mean that a source was downloaded, processed or persisted.
+- **Earth Engine ingestion:** `oseas.ingest` audits configured table assets, reads bounded pages, normalizes supported geometries and upserts source features using stable keys.
+- **Processors:** Python modules and scripts implement source-specific rainfall, heat, fire, population, wind-resource and flood workflows. Each processor has its own prerequisites and evidence contract.
+- **Spatial database:** `database/schema.sql` defines source inventory, administrative units, spatial assignments, model outputs, assessments, provenance and run-quality tables.
+- **API:** `src/` exposes validated read-only JSON and GeoJSON endpoints. Processing is run through commands, not API requests.
+- **Frontend:** `frontend/` contains the map and evidence screens. It consumes the API rather than querying PostGIS directly.
+- **Live GEE tiles:** the map layer endpoint can generate short-lived tile templates server-side for configured Earth Engine assets. Tile display is not a feature query or pixel-identify operation.
 
-The importer pages Earth Engine tables and writes one bounded transaction per page. Stable IDs derive from the source dataset and source feature ID, with deterministic serialized-feature fallback. Database unique constraints on `(source_dataset_key, source_feature_id)` and upserts make reruns reconcile committed features. A PostgreSQL session advisory lock prevents concurrent importers. It does not delete source rows.
+## Processing and persistence
 
-## Flood method and evidence
+Earth Engine calculations are generally performed remotely. Feature pages and bounded vector outputs are persisted to PostGIS rather than downloading complete raster collections into the API process. Raster workflows use source-specific acquisition/processing paths and record their own checksums, coverage and method details where implemented.
 
-The current baseline is `oseas-s1-relative-backscatter-screen-v2`. It requires explicit non-overlapping event and baseline windows, an EPSG:4326 bounding box no larger than 1,000 km², and a same-orbit Sentinel-1 VV stack with at least 70% footprint coverage in both windows. It applies VV and change thresholds, a terrain-slope filter, JRC and optional mapped-lake permanent-water masks, a connected-pixel filter and a minimum patch area.
+Ingestion uses deterministic source identifiers, page-level writes and database uniqueness constraints to make reruns idempotent. It does not delete source records that disappear upstream. Assessment runs retain their own provenance and status.
 
-Results are `modeled` candidate polygons, not confirmed inundation. CHIRPS event-window rainfall is stored as context and does not drive the classifier. No candidate intersection is converted into a zero risk score. Asset exposure rows are written only for positive geometry intersections. Administrative summaries leave exposure fractions null because satellite coverage and asset completeness may be incomplete. The method has not been validated against independent Kenya flood reference polygons.
+## Spatial semantics
 
-## Dataset registry
+- Point assets are assigned to boundaries using `ST_Covers`.
+- Lines and polygons are related to administrative units using intersections. Where supported, line length or polygon area is measured on the clipped geometry.
+- Spatial intersection indicates geographic overlap only. It does not establish electrical connectivity or service dependency.
+- Map output GeoJSON uses longitude/latitude coordinates in EPSG:4326.
 
-`config/data_catalog.json` is the shared registry for Earth Engine collections, direct APIs, public downloads and event-specific references. The bounded flood workflow currently uses Sentinel-1, CHIRPS, Copernicus DEM and JRC Global Surface Water. Other listed climate, optical, thermal, land-cover, fire and event sources remain registered with explicit retrieval states; they are not represented as ingested unless a successful run is stored.
+## Interpretation boundaries
 
-## API
+The system keeps source observations, modeled hazard candidates, measured exposure and assessment interpretation separate. Sentinel-1 and Prithvi flood outputs are candidates, not confirmed flood extents. Asset exposure is not a failure probability. Vulnerability, criticality and resilience dimensions remain unknown or withheld when their required inputs are absent.
 
-The existing Express service mounts OSEAS read-only routes at `/api/v1/oseas`. Its responses use EPSG:4326 GeoJSON for map features and explicit `not_assessed` states when outputs are absent. `/api/v1/oseas/readiness` is authoritative; the root health endpoint is a liveness/database check, not scientific readiness.
-
-## Boundaries and retired starter code
-
-Administrative point assets are assigned using `ST_Covers`. Lines and polygons are assigned using intersections; lengths and areas are measured on the clipped geometry in geography units. Current assignments are refreshable and marked through `is_current`.
-
-The old Kilimani AOI, generated development-change labels, Kili detection routes and case-management routes have been removed from the active backend. Only shared Earth Engine authentication and PostgreSQL/API infrastructure remain reused. The OSEAS frontend is unchanged.
+See [`ASSESSMENT_METHODS.md`](ASSESSMENT_METHODS.md) for calculation details and [`PIPELINE_CONTRACTS.md`](PIPELINE_CONTRACTS.md) for stage acceptance rules.

@@ -1,221 +1,116 @@
-# OSEAS end-to-end runbook
+# OSEAS pipeline runbook
 
-## 1. Configure and apply schema
+This runbook covers the normal path from configuration to published evidence. Do not start a full processing run until credentials, schema, source access and the intended analysis period have been checked. Nationwide Prithvi processing can take many hours.
 
-From the backend project directory:
+For a description of each stage's inputs and acceptance conditions, see [`PIPELINE_CONTRACTS.md`](PIPELINE_CONTRACTS.md). For source-specific calculations and limitations, see [`ASSESSMENT_METHODS.md`](ASSESSMENT_METHODS.md).
 
-```powershell
-npm ci
-python -m pip install -r requirements.txt
-```
+## 1. Prepare the environment
 
-Set `.env` locally with `DB_URL` (or supported PostgreSQL URL alias), `GEE_PROJECT_ID`, Earth Engine credentials, and all supplied `GEE_ASSET_*` values. Do not copy secrets into source control or reports. NASA FIRMS uses `NASA_FIRMS_MAP_KEY`; without historical dates it requests the latest one-day `VIIRS_SNPP_NRT` results and filters them to the exact union of ingested Kenya county boundaries. Set both `OSEAS_FIRE_START_DATE` and `OSEAS_FIRE_END_DATE` for a historical window. Black Marble uses the existing Earth Engine credentials and `NASA/VIIRS/002/VNP46A2`; LAADS tokens are not needed for this adapter.
-
-Paste [`../database/schema.sql`](../database/schema.sql) into Supabase SQL Editor and execute it. It uses additive `CREATE ... IF NOT EXISTS`/`ALTER ... IF NOT EXISTS` statements and does not drop existing data. Then run the read-only schema check:
+Follow [`SETUP.md`](SETUP.md) to install dependencies and configure backend-only secrets. Apply [`../database/schema.sql`](../database/schema.sql) to PostGIS, then confirm connectivity and schema:
 
 ```powershell
 npm run db:setup
 ```
 
-The bundled 2024 UNOSAT reference polygons are local files and do not require Earth Engine. Check them before database ingestion, then import after the schema check:
+Do not expose database URLs, service-role keys, Earth Engine keys, or NASA API keys in logs, screenshots, or frontend environment variables.
 
-```powershell
-npm run oseas:flood:unosat:audit
-npm run oseas:flood:unosat:ingest
-```
-
-The audit is read-only. The import upserts four source polygons by dataset/file/feature key into `flood_reference_features`; it is safe to rerun. The source contains two event codes (`FL20240421KEN`, `FL20240426KEN`) and labels its own field validation as not yet complete. The importer retains source shapefile bundles and checksums, simplifies operational polygons at a configurable tolerance (default about 5.6 m, matched to the 10 m product scale), and lets PostGIS repair polygon topology. This does not validate any model output.
-
-## 1a. WorldPop population exposure
-
-Acquire the 2024 WorldPop Global2 R2025A constrained Kenya count raster and calculate a local preview:
-
-```powershell
-npm run oseas:population:audit
-npm run oseas:population:download
-npm run oseas:population:exposure
-npm run oseas:population:admin-preview
-```
-
-Download and basic preview are file-only operations. The admin preview additionally reads county/ward geometries in a read-only PostGIS transaction. Both process raster windows in bounded memory, count overlapping polygons once per event, and write GeoJSON plus a provenance manifest under ignored `outputs/`. Display geometry is generalized for compact mapping; population sums use the original exact shapes. Preview commands do not write result rows to Supabase.
-
-After the reference import has exited successfully and `flood_reference_features` plus county/ward boundaries are present, persist the event and intersecting administrative summaries:
-
-```powershell
-npm run oseas:population:persist
-```
-
-This command checks for an active UNOSAT import and refuses to overlap it. It writes idempotent population rows, raster checksum/version metadata, quality and spatial coverage records. WorldPop population is a modeled estimate of residents inside the flood footprint, not measured impacts and not people supplied by energy assets. See [`IMPLEMENTATION_STATUS.md`](IMPLEMENTATION_STATUS.md) and [`FRONTEND_INTEGRATION_GUIDE.md`](FRONTEND_INTEGRATION_GUIDE.md).
-
-## 1b. Single configured pipeline command
-
-After the initial schema and environment setup, rotate any exposed database credential, confirm the Earth Engine/database credentials are configured locally, and run:
-
-```powershell
-npm run oseas:run
-```
-
-The command syncs the three Kenya Global Wind Atlas map rasters and manifest, obtains and smoke-tests the pinned Prithvi task checkpoint, runs database preflight, then performs Earth Engine vector ingestion, county/ward assignment, NASA POWER heat, Black Marble, UNOSAT reference ingest, CHIRPS rainfall zonal statistics, WorldPop acquisition and population exposure, NASA FIRMS when configured, evidence-gated assessments, and configured flood screening. The vector importer reuses a source by default when its latest successful version matches the configured Earth Engine asset, has no skipped geometries, and the persisted row count still matches; this avoids downloading static assets such as transformers and boundaries on every hazard-analysis run. To deliberately refetch and upsert all configured vector sources, use `npm run oseas:run -- --refresh-inventory`; for the importer alone, use `npm run oseas:ingest -- --refresh`. Refresh upserts returned source features but does not delete database rows that are absent from the current source. If `OSEAS_PRITHVI_EVENT_START/END` (or the flood-event date pair) is configured, it runs resumable nationwide Prithvi tiling without using the bounded AOI setting. It writes the per-stage report to `outputs/last_pipeline_run.json` and prints final database status. Existing feature and assessment records are retained and updated through stable-key upserts; no database reset or cleanup is performed.
-
-With nationwide Prithvi enabled, the pipeline can take many hours and makes one small, temporary Earth Engine chip at a time for local model inference; it removes each chip after processing and persists county/ward pixel summaries and run metadata, not imagery. The pinned inference code requires 512×512 chips (10 m pixels) rather than 256×256; a default 64-pixel overlap yields a 448×448 non-overlapping core for zonal counting. A one-tile smoke run can be selected with `OSEAS_PRITHVI_NATIONAL_MAX_TILES=1`; remove the cap and rerun the same command to resume the same event fingerprint. `OSEAS_PRITHVI_BBOX` applies only to the separate bounded `oseas:prithvi:flood` pilot command (maximum 5 km²). None of these settings changes the national asset inventory or scores the separate Kano pilot. Check stage output and `outputs/last_pipeline_run.json`, and resolve failed/blocked stages before relying on API results. `clean`, lint/test checks, read-only audits, and stale-run recovery are not data pipeline stages and are not invoked automatically. In particular, stale-run recovery changes run metadata and must only be used after separately confirming that the writer process is dead.
-
-Global Wind Atlas GeoTIFFs are served from the API process's local cache, not PostGIS. The pipeline syncs the local API cache; the Render Blueprint also syncs the rasters during its build so the deployed API includes the manifest and map files. Redeploy the API after updating this build configuration. The model checkpoint belongs on the pipeline runner; the deployed read API serves its persisted PostGIS outputs and does not need a second model copy.
-
-### Optional Kano demo view
-
-The national pipeline remains nationwide. To display only the already-published Kano pilot through the read API, query `GET /api/v1/oseas/assets?sourceDataset=osm_kano_pilot&bbox=34.60,-0.40,35.30,0.10` and use each returned asset ID with the exposure and vulnerability routes. The same filters are supported by the `asset_exposure` and `asset_vulnerability` GeoJSON layers. This is a read-only view of the separate pilot; do not change national AOI settings or rerun the national pipeline as a way to produce the pilot scores. Pilot scores remain screening heuristics, and heat/wildfire `not_assessed` values must not be styled as zero risk.
-
-The importer may return a partial status for skipped invalid geometries. The orchestrator verifies the newest database run has no failed assets and that both county and ward source features persisted before assignment and dependent analysis can run. Geometry warnings remain visible and cause the overall report to be `partial`. If ingestion, boundary verification, or assignment fails, dependent ward/county outputs are blocked instead of being regenerated from stale boundaries.
-
-The Earth Engine reducers return candidate vectors and zonal values, not source imagery. Map-ready outputs are persisted to PostGIS and served through the read-only API under `/api/v1/oseas`; each stage’s status is the authority for whether its output is usable. See [`../PIPELINE_CONTRACTS.md`](PIPELINE_CONTRACTS.md), [`../PIPELINE_AUDIT.md`](PIPELINE_AUDIT.md), and the project checklist [`../../outputs.md`](../../outputs.md). A process lock rejects overlapping orchestrators.
-
-The bounded flood examples use a 4.92 km² AOI around the Nairobi/Kiambu UNOSAT reference polygon (`37.0588,-1.2335,37.0788,-1.2135`), with event imagery from 2024-04-29 through 2024-05-04 and a pre-event Sentinel-1 baseline from 2024-03-15 through 2024-04-28 (45 days). This is one localized pilot window; its summaries must not be described as a national map. The bounded Sentinel-1 flood event stage uses `OSEAS_FLOOD_BBOX`, `OSEAS_FLOOD_EVENT_START/END`, and `OSEAS_FLOOD_BASELINE_START/END`. The bounded Prithvi command uses `OSEAS_PRITHVI_BBOX`; the nationwide worker uses `OSEAS_PRITHVI_EVENT_START/END`, `OSEAS_PRITHVI_MAX_CLOUD_PERCENT`, `OSEAS_PRITHVI_OVERLAP_PIXELS`, and optional `OSEAS_PRITHVI_NATIONAL_MAX_TILES`, with no bbox. Both modes use QA60 clear-pixel checks; national candidate pixels and observation coverage are aggregated to ward/county summaries and remain unvalidated candidate evidence. The bounded worker writes candidate polygons and asset intersections; nationwide Prithvi persists administrative pixel summaries rather than polygons or a raster. Inference is not Kenya validation. `OSEAS_HEAT_START_DATE`, `OSEAS_HEAT_END_DATE`, and `OSEAS_HEAT_SCREEN_THRESHOLD_C` configure heat processing (defaults: 2024 and 35 C). `OSEAS_FIRE_START_DATE/END` optionally select a historical FIRMS window. `OSEAS_FIRE_BBOX` can narrow the request envelope; an empty value derives it from Kenya county boundaries. The adapter filters returned points to those exact boundaries. `OSEAS_FIRE_SENSOR` defaults to `VIIRS_SNPP_NRT`, and `OSEAS_FIRE_PROXIMITY_KM` defaults to 5.
-
-## Recovery after an abrupt shutdown
-
-The last audit found no active Earth Engine importer, Black Marble job or orchestrator process. The newest inventory run (`5c3d9c73-fb0a-41f6-8b35-c38ee4880021`) is already terminal `partial`; its failed ward source is not still processing. A regression fix now extracts polygonal members from ward/county `GeometryCollection` features, but the live database has not yet been refreshed with it.
-
-Before any new database write, rotate any database credential that has been exposed, update the local `.env` without pasting or logging the value, and verify the configured Earth Engine account and database access. Then, from `osea_data_pipe`:
-
-```powershell
-npm run oseas:status
-npm run oseas:audit
-npm run oseas:ingest
-npm run oseas:status
-```
-
-`npm run oseas:ingest` is safe to rerun: it uses deterministic source keys, page-level transactions and a PostgreSQL advisory lock. It can still finish `partial` when individual source geometries are unusable. Inspect its terminal status, per-asset result and quality details; specifically confirm `kenya_wards` no longer fails and review the 148 previously skipped line features. Do not infer that a source is complete merely because its earlier pages committed.
-
-Only after the ward source is successful and the inventory result is reviewed, continue with:
-
-```powershell
-npm run oseas:run -- --skip-earth-engine
-```
-
-This reuses the verified inventory, refreshes assignments, and runs the configured downstream stages, including map-cache sync and local image/raster workflows. Inspect `outputs/last_pipeline_run.json` and `npm run oseas:status` after it exits. If any prerequisite stage failed, stop and address it rather than presenting downstream results as accepted. Never delete a lock file while its recorded process might still be active.
-
-### CHIRPS rainfall event context
-
-Run `npm run oseas:rainfall` directly or use the single pipeline command. The adapter reads persisted, dated flood reference events and county/ward geometries, calculates the 30-day CHIRPS total ending on each event date, and compares it with same-calendar 30-day totals from 2001–2020. It persists total, absolute anomaly and percentage anomaly (percentage is null when the baseline is zero) to `climate_observations` with deterministic IDs, source-version checksum, quality checks and run provenance. Reporting units are processed in batches; each batch refreshes a durable run lease and prints progress. An expired lease is recoverable after interruption, and output IDs make reruns idempotent. The API map layer is `/api/v1/oseas/layers/rainfall/geojson`. These summaries describe gridded rainfall context; they do not establish flood extent, asset damage or service outage. No SQL migration is required because this reuses the existing OSEAS climate-observation schema.
-
-### NASA VIIRS Black Marble nighttime lights
-
-The adapter uses NASA Black Marble VNP46A2 daily imagery from the public Earth Engine catalog. NASA confirms the collection is daily, 500 m, and carries quality bands; Earth Engine listed observations through 2026-08-19 when the input window was set. The configured recent interval is 2023-08 through 2026-07 (36 complete months); the fixed comparison period is 2012-01 through 2015-12, with January 2012 starting on the 19th. Daily imagery is screened to `Mandatory_Quality_Flag == 0`, reduced to a monthly median, and exported in two restartable Kenya tiles. The validity band keeps missing pixels distinct from true zero radiance. Run `npm run oseas:nightlights` or let the configured pipeline invoke it. NASA documents the VNP46A2 product and [its 0.1 scale factor](https://ladsweb.modaps.eosdis.nasa.gov/filespec/VIIRS/2/VNP46A2_v2.0.fs); the Earth Engine catalog values are already exposed in radiance units, so the adapter does not apply that scale factor a second time. [Earth Engine catalog entry](https://developers.google.com/earth-engine/datasets/catalog/NASA_VIIRS_002_VNP46A2)
-
-The adapter records source image counts by month, monthly valid-observation fractions, source checksum, selected periods, and nulls for missing data. Administrative statistics are polygon zonal summaries. Energy-asset and critical-service contextual statistics use a 500 m buffer around a representative point. The `nightlights` GeoJSON layer exposes recent median radiance, baseline median radiance, percent change, quality/coverage properties, source periods, and provenance. A measured zero is distinguishable from missing/invalid observations. Radiance is contextual evidence only: it cannot establish household electricity access, electrical service dependency, outage duration, or asset damage. Download tiles and per-month checkpoints are stored under ignored `data/raw/viirs_black_marble/` and removed after each successfully processed month.
-
-The pipeline is restartable: source feature upserts use stable IDs, WorldPop result IDs include both raster and source-footprint fingerprints, and evidence assessments persist `last_asset_id` after each committed 250-asset batch. Assessment sessions refresh after committed checkpoints and the command retries interruptions from the saved database position; deterministic evidence IDs prevent duplicate rows. Ward/county summaries are persisted with batched upserts. Progress includes counts, elapsed time and ETA. Black Marble uses verified monthly checkpoints and `OSEAS_NTL_BATCH_SIZE` (sample: 10,000 zones), so it can resume without reacquiring complete months. The orchestrator continues through independent stages if an optional source is blocked and reports each outcome.
-
-## 1c. Heat and wildfire evidence
-
-```powershell
-npm run oseas:heat
-npm run oseas:fire
-```
-
-NASA POWER heat products store daily T2M_MAX air temperature, anomalies against the 2001–2020 mean monthly T2M_MAX by calendar month, configurable hot-day counts, grid-cell heat events, and nearest-grid asset screening within 45 km. The NASA POWER regional API uses a 0.5-degree grid; this is coarse air-temperature context, not Landsat land-surface temperature, microclimate, or proof of damage. FIRMS stores active-fire detections as points and proximity measurements; it does not produce burn perimeters. Absence of a detection is not proof of no fire. A separate burned-area product/adapter remains outstanding.
-
-## 2. Check Earth Engine source access
-
-The `.env` now includes the supplied river, lake and Nov 2023 flood Earth Engine asset IDs. After applying the additive schema, run only those sources with `npm run oseas:ingest -- --datasets kenya_rivers,kenya_lakes,kenya_flood_2023_reference`. Page upserts are keyed by the original source feature ID and do not duplicate existing rows.
+## 2. Audit source access
 
 ```powershell
 npm run oseas:audit
 npm run oseas:catalog:audit
 ```
 
-The first command checks the configured vector infrastructure assets. The second performs bounded reads of selected climate/satellite collections over a small Nairobi bbox for 2024-04-01 through 2024-05-01; it prints counts and band names, not imagery or credentials. Both require active Earth Engine authentication. The fixed source audit dates test availability only; they are not declared flood events.
+The asset audit checks configured Earth Engine table access and source schemas. The catalog audit performs a bounded smoke check of selected public Earth Engine collections. These audits do not write source features to PostGIS, calculate a national product, or validate a model.
 
-## 3. Ingest infrastructure once
+## 3. Ingest and assign inventory
 
 ```powershell
-npm run oseas:status
 npm run oseas:ingest
-```
-
-The importer pages and batches writes, logs counts/percent/elapsed/ETA, uses deterministic source keys and upserts, and holds a single-writer Postgres advisory lock. Monitor from another terminal with `npm run oseas:status`. The command exits `0` when every configured source succeeds, `2` for a partial run, or `1` for setup/all-source failure. Rerun after fixing a partial source; existing source rows update in place. The run history is retained.
-
-If a machine restart leaves a run marked `running`, first confirm no importer is active, then:
-
-```powershell
-npm run oseas:recover-stale
-npm run oseas:status
-```
-
-Recovery checks importer, flood, and UNOSAT writer locks; it marks runs older than 30 minutes with no matching active writer as failed and updates linked model-run status. Feature rows are never deleted or rewritten.
-
-## 4. Assign assets to wards/counties
-
-After the latest source ingestion is `completed` or `partial` with zero failed source assets:
-
-```powershell
 npm run oseas:assign-admin
-```
-
-Assignments are processed in 2,000-asset batches with progress/ETA output and deterministic asset/unit upserts. Points use polygon coverage. Lines and polygons use intersections; line lengths and polygon areas are measured on the clipped part in each unit. Run this before standalone flood screening; the one-command pipeline runs it before heat, population and assessments.
-
-## 5. Run a bounded flood screen
-
-Select an actual event window, a non-overlapping reference period from the same season, and an AOI no larger than 1,000 km². Dates use an inclusive start and exclusive end. The example values below are placeholders; replace them with dates supported by your analysis. A date range is not proof that flooding occurred.
-
-```powershell
-npm run oseas:flood:screen -- --bbox 36.70 -1.40 37.00 -1.10 `
-  --event-start YYYY-MM-DD --event-end YYYY-MM-DD `
-  --baseline-start YYYY-MM-DD --baseline-end YYYY-MM-DD `
-  --orbit-pass ASCENDING
-```
-
-The processor requires >=70% Sentinel-1 footprint coverage for both windows. Default parameters are event VV < -16 dB, VV change < -3 dB, slope < 5 degrees, JRC occurrence < 80%, and candidate patch area >=10,000 m². The method is an unvalidated flood-candidate screen. It stores candidate polygons, positive asset intersections, source/run provenance and ward/county counts. It does not assign vulnerability, reliability, resilience, outage probability, or zero-risk labels. All query/processing state is bounded; no national raster is downloaded into app memory.
-
-If `GEE_ASSET_KENYA_LAKES` is configured, the Sentinel-1 baseline excludes mapped lake pixels and the Prithvi workflow excludes them after inference; the six model input bands remain unchanged. The S1 workflow records scene-footprint coverage separately from valid-pixel coverage. Both outputs remain unvalidated candidates.
-
-Inspect output:
-
-```powershell
 npm run oseas:status
 ```
 
-Then query readiness, catalog, runs, candidate/reference flood, hydrography and `/layers/{output}/geojson` for the registered output keys documented in [`API_CONTRACTS.md`](API_CONTRACTS.md). These routes read stored evidence and do not fabricate missing layers.
+Ingestion writes source features in bounded pages and records run, version and quality metadata. Stable source keys make retries idempotent; ingestion does not delete database rows absent from the latest source snapshot. Review every source's terminal status and skipped geometry counts. Assignment requires usable current county and ward boundaries.
 
-## 6. Global Wind Atlas resource cache
+## 4. Run only the required evidence workflows
 
-The Kenya wind-speed, power-density and air-density GeoTIFF endpoints returned TIFF data and have been downloaded to the local cache. Each raster is 4,287 x 3,829 cells at 0.0025 degree spacing in WGS 84 geographic coordinates and covers the Kenya bounding envelope. The sync command retries up to three times, caps each source at 100 MB, validates sampled pixels and writes checksums. It retains source rasters and creates map copies with negative values masked to nodata. Cached files are reused unless `GWA_FORCE_REFRESH=1`. The API exposes manifest metadata and GeoTIFF downloads. These are renewable-resource layers, not wind hazard evidence. The separate GWA country GeoJSON route returned HTTP 400; existing OSEAS administrative units provide reporting boundaries. GWA documents country GIS downloads and advises against bulk use of the API: [official GIS files page](https://globalwindatlas.info/en/download/gis-files).
+Choose workflows that match the question, source availability and time budget. Examples:
 
-## 7. API and service
+```powershell
+npm run oseas:rainfall
+npm run oseas:heat
+npm run oseas:nightlights
+npm run oseas:fire
+npm run oseas:population:audit
+npm run oseas:population:download
+npm run oseas:population:persist
+npm run oseas:assessments
+```
+
+WorldPop persistence requires a downloaded/validated raster, flood-reference footprints, administrative boundaries and the database schema. FIRMS requires its server-side API key. Other workflows have their own date, coverage and credential prerequisites. Review the relevant source sections in [`DATA_CATALOG.md`](DATA_CATALOG.md) and the method before treating an output as available.
+
+`npm run oseas:run` orchestrates configured stages. It may synchronize wind rasters, prepare model resources, ingest or reuse inventory, and run processors depending on configuration. It is not a quick startup command. Check its stage report and terminal statuses instead of assuming every stage ran successfully.
+
+## 5. Optional flood processing
+
+The Sentinel-1 screen requires an explicit small-area bounding box, event interval and baseline interval. Example command shape:
+
+```powershell
+npm run oseas:flood:screen -- --bbox <west> <south> <east> <north> `
+  --event-start YYYY-MM-DD --event-end YYYY-MM-DD `
+  --baseline-start YYYY-MM-DD --baseline-end YYYY-MM-DD
+```
+
+The processor is bounded (maximum 1,000 km² and 45 days per window). It checks same-orbit coverage, terrain and persistent-water masks. Outputs are modeled flood candidates. They are not confirmed inundation, calibrated flood probability, asset damage or outage.
+
+The bounded Prithvi pilot is limited to 5 km²:
+
+```powershell
+npm run oseas:prithvi:setup
+npm run oseas:prithvi:flood -- --bbox <west> <south> <east> <north> `
+  --event-start YYYY-MM-DD --event-end YYYY-MM-DD
+```
+
+Prithvi nationwide mode is a separate resumable tiled workflow. It can be started through `npm run oseas:prithvi:national` or by the orchestrator when event dates are configured. Read [`MODEL_CARD.md`](MODEL_CARD.md) before running it; national accuracy is not validated.
+
+## 6. Verify the results
+
+After each run:
+
+1. Inspect the terminal summary and any generated stage report under `outputs/`.
+2. Run `npm run oseas:status`.
+3. Check `/api/v1/oseas/readiness` and `/api/v1/oseas/runs`.
+4. Confirm the intended period, spatial coverage, row counts, quality warnings and provenance for each output.
+5. Stop if a prerequisite failed; do not interpret stale downstream rows as results from the failed run.
+
+An empty result may mean no source data, no valid observations, no geometric intersections, or a completed analysis with no candidate features. Use its explicit status and provenance to tell these cases apart. Never present `not_assessed` as a measured zero.
+
+## 7. Serve the API and frontend
+
+Start the API from this directory:
 
 ```powershell
 npm run dev
 ```
 
-`GET /health/live` checks process liveness; `/health/ready` checks database availability; `/api/v1/oseas/readiness` is the OSEAS source/model/output readiness report. A live HTTP process does not imply that the data or hazard assessment is ready.
-
-In production, call OSEAS routes with `Authorization: Bearer <Supabase access token>`. Configure `SUPABASE_URL` and the server-only `SUPABASE_SERVICE_ROLE_KEY`; never put the service-role key in a client app. `OSEAS_REQUIRE_AUTH=true` enables the same verification in development.
-
-## 8. Prithvi and remaining sources
-
-Set up the pinned Sen1Floods11 Sentinel-2 L1C checkpoint. This downloads and verifies the bundle, then runs official sample inference and requires a non-empty prediction raster before setup passes:
+Start the map separately from `frontend`:
 
 ```powershell
-npm run oseas:prithvi:setup
+npm run dev
 ```
 
-After the additive OSEAS schema is applied and inventory ingestion succeeds, run a small (maximum 5 km²) AOI and an actual event date window:
+The API serves read-only data under `/api/v1/oseas`. Production access uses bearer-token validation unless `OSEAS_PUBLIC_READ_API=true` explicitly enables public GET access. The map may also request temporary Earth Engine map tiles through the backend; those are visual tiles, not a substitute for feature queries or raster identify. See [`API_CONTRACTS.md`](API_CONTRACTS.md) and [`FRONTEND_INTEGRATION_GUIDE.md`](FRONTEND_INTEGRATION_GUIDE.md).
 
-```powershell
-npm run oseas:prithvi:flood -- --bbox <west> <south> <east> <north> `
-  --event-start YYYY-MM-DD --event-end YYYY-MM-DD
-```
+## Safe retry and interruption handling
 
-The first Kenya pilot is recorded in [`PRITHVI_KENYA_VALIDATION.md`](PRITHVI_KENYA_VALIDATION.md). It uses a pinned Garissa Sentinel-2 L1C acquisition, stores candidate flood polygons and asset intersections in PostGIS, writes local map-ready GeoJSON/GeoTIFF/PNG products, and persists AOI-local county/ward summaries. The runner logs scene selection and emits an inference heartbeat every 30 seconds; official CPU inference can take several minutes. A run can complete with zero asset intersections; that means no candidate geometry intersected the inventory assets in that AOI, not that assets are safe.
-
-The model is configured for the correct optical task. Its Kenya accuracy is not evaluated; treat output polygons as screening candidates until independently validated. Other catalogued datasets (ERA5, NASA POWER, WorldClim, climate projections, Sentinel-2, Landsat, land cover, HydroSHEDS/OSM, event references, FIRMS and MODIS) have individual access states in [`DATA_CATALOG.md`](DATA_CATALOG.md); do not treat catalog registration as retrieval.
+Page writes and stable IDs allow inventory ingestion to be retried. Before restarting a long workflow, confirm that no writer is still active using `npm run oseas:status` and the process/operator's normal monitoring. Do not remove lock files or mark a run stale while its worker may still be alive. After interruption, inspect the run state, rerun the relevant idempotent stage, and verify its final database output before running dependent stages.
 
 ## Troubleshooting
 
-- **No new run in database while process exists:** check Earth Engine authentication and the terminal output. Do not launch another importer while the original process is active. `oseas:status` includes Postgres importer sessions; an OS process without a DB session is not evidence of ingestion progress.
-- **EE authentication:** verify project, account permissions, enabled Earth Engine API and service-account file path. Keep service-account keys out of this repository.
-- **No S1 images:** choose a window and orbit pass with actual coverage; do not expand the bbox beyond 1,000 km². Inspect the source audit.
-- **Coverage below 70%:** choose a smaller AOI or another valid acquisition window; uncovered places remain unassessed.
-- **Missing table/column:** apply the current additive schema in Supabase SQL Editor and rerun `npm run db:setup`.
-- **Zero candidate polygons:** this is a warning and an empty model output, not proof of zero flood risk. Check the image counts, coverage, thresholds, and an independent reference source.
-- **Too many polygons:** divide the AOI into small tiles or use a future batch/export-backed workflow; do not increase memory limits.
+- **Authentication or asset access:** check the configured identity, Earth Engine project, full asset ID and access grants.
+- **No source images:** choose a period with actual product coverage; do not interpret an empty collection as zero hazard.
+- **Coverage gate failed:** use a smaller AOI or a supported period. Keep uncovered areas unassessed.
+- **Geometry warnings:** review source geometry type and quality details; do not claim the inventory is complete until resolved or documented.
+- **Missing table/column:** apply the current additive SQL schema, then run `npm run db:setup`.
+- **Unexpectedly long run:** confirm the process and stage. Nationwide tiling and multiyear raster work are expected to take much longer than API queries.

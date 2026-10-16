@@ -1,15 +1,17 @@
-# OSEAS developer setup
+# Developer and service setup
+
+This project has a backend/data pipeline in `osea_data_pipe` and a separate React map in `frontend`. The backend connects to Earth Engine and PostgreSQL/PostGIS; the browser communicates with the backend API only.
 
 ## Prerequisites
 
-- Node.js 20+ and npm.
-- Python 3.10+.
-- A Supabase/PostgreSQL connection URL with PostGIS enabled.
-- Earth Engine access to each configured table asset, and a Cloud project enabled for Earth Engine.
+- Node.js and npm.
+- Python matching the project environment and packages in `requirements.txt`.
+- A PostgreSQL database with PostGIS enabled.
+- Earth Engine access for each configured source asset and an Earth Engine-enabled Cloud project.
 
-## Installation
+## Install and configure the backend
 
-From the backend project directory:
+From `osea_data_pipe`:
 
 ```powershell
 npm ci
@@ -17,60 +19,70 @@ python -m pip install -r requirements.txt
 Copy-Item .env.example .env
 ```
 
-Set the real values in `.env`. For service-account authentication, set `GEE_SERVICE_ACCOUNT_EMAIL` and a readable `GEE_SERVICE_ACCOUNT_KEY_PATH`. Keep the key file outside source control. If using user credentials, authenticate Earth Engine through the normal `earthengine authenticate` flow and leave the key path empty.
+Set real values in the local `.env` or deployment secret manager. Important settings:
 
-The asset references supplied for OSEAS were added to the private `.env` as `projects/osea-hack/assets/osea/<asset>`. Run the audit to verify these exact IDs and replace any that do not resolve. `GEE_PROJECT_ID` controls Earth Engine initialization; do not assume it is the same project that owns the assets.
+| Variable | Purpose |
+| --- | --- |
+| `DB_URL` | PostgreSQL/PostGIS connection. `DATABASE_URL` and `SUPABASE_DB_URL` are supported aliases. |
+| `GEE_PROJECT_ID` | Cloud project used by Earth Engine initialization. |
+| `GEE_SERVICE_ACCOUNT_EMAIL`, `GEE_SERVICE_ACCOUNT_KEY_PATH` | Optional service-account credentials. Store the key outside the repository. |
+| `GEE_ASSET_*` | Full IDs for the configured Earth Engine feature-table inventory. |
+| `SUPABASE_URL`, `SUPABASE_SERVICE_ROLE_KEY` | Server-side bearer-token verification in production. |
+| `CORS_ORIGIN` | Exact allowed browser origin(s) for production. |
+| `OSEAS_PUBLIC_READ_API` | Optional explicit public access for read-only GET routes. |
+| `NASA_FIRMS_MAP_KEY` | Optional server-side key for the FIRMS adapter. |
 
-For NASA sources, `NASA_FIRMS_MAP_KEY` holds the server-side FIRMS key. Latest-day ingestion defaults to `VIIRS_SNPP_NRT`; the request envelope comes from ingested Kenya county boundaries, and detections are filtered to their exact union. Leave both `OSEAS_FIRE_START_DATE` and `OSEAS_FIRE_END_DATE` empty for the latest day, or set both for historical data. Run `npm run oseas:fire` to update fire evidence without repeating other pipeline stages. Black Marble VNP46A2 uses the configured Earth Engine credentials and does not require an LAADS token. The `.env` recent period must include 36 complete months; the baseline defaults to 2012-01 through 2015-12.
+Never commit credentials or copy them into frontend variables. If a secret has been exposed, rotate it before running any database write.
 
-## Database
+## Create/check the database
 
-Open [`../database/schema.sql`](../database/schema.sql) and run it in Supabase SQL Editor. This is the only schema installation step. It creates OSEAS tables and indexes additively and does not delete old or unrelated database objects.
-
-Then check connection and table presence:
+Apply [`../database/schema.sql`](../database/schema.sql) to the intended Supabase/PostgreSQL database. It creates OSEAS objects additively; it is not a data reset. Then run:
 
 ```powershell
 npm run db:setup
 ```
 
-The script performs a read-only check. It does not apply schema or migrate legacy data. Python accepts `DB_URL`, `DATABASE_URL`, or `SUPABASE_DB_URL`. Use the Postgres connection URL rather than the Supabase service role key for direct PostGIS writes.
+This is a read-only connectivity/schema check. It does not apply the SQL file or migrate legacy tables.
 
-The OSEAS API requires a Supabase Auth bearer token in production by default. To serve public map data without sign-in, set `OSEAS_PUBLIC_READ_API=true`; this permits only `GET` requests through the OSEAS API router, and other methods remain authenticated. The setting is disabled by default. Keep `SUPABASE_SERVICE_ROLE_KEY` on the backend only; it is used to validate access tokens when authentication is required. Set `OSEAS_REQUIRE_AUTH=true` to enforce authentication during development. Do not expose the service-role key to a browser or client app.
-
-For a hosted API, set `NODE_ENV=production`, `DB_URL` to the Supabase Postgres pooler URL, `SUPABASE_URL`, `SUPABASE_SERVICE_ROLE_KEY`, and `CORS_ORIGIN` to the frontend origin(s). Build with `npm run build` and start with `npm start`. Set `TRUST_PROXY_HOPS` to the number of trusted reverse proxies in front of the service (usually `1` behind a single host proxy); leave it `0` when clients connect directly. Keep `SUPABASE_SERVICE_ROLE_KEY` and `DB_URL` in the host's server-side secret store.
-
-## Render API deployment
-
-The repository-root [`render.yaml`](../../render.yaml) defines the API service only. Render uses `osea_data_pipe` as the service root, installs the minimal Python raster dependencies, syncs the three Global Wind Atlas map products into the build image, runs `npm run build`, starts `npm start`, and checks `/health/ready`. This makes the wind resource manifest and GeoTIFFs available to the deployed API; deploy the updated Blueprint to populate its cache. It connects to the existing Supabase database; the Blueprint does not create a database or run schema changes. The health check returns only whether PostGIS is reachable and never returns database error text or Earth Engine credential paths.
-
-During Blueprint setup, provide these server-side values when Render prompts for them:
-
-- `DB_URL`: the Supabase Postgres pooler URL.
-- `SUPABASE_URL` and `SUPABASE_SERVICE_ROLE_KEY`: used by the API to validate incoming Supabase access tokens. Never put the service-role key in browser code.
-- `CORS_ORIGIN`: the exact HTTPS origin(s) of the frontend, comma-separated if there is more than one. Wildcards are rejected in production.
-- `OSEAS_PUBLIC_READ_API=true`: optional demo setting to allow public GET access to read-only OSEAS routes; all non-GET methods remain authenticated.
-
-The OSEAS routes require `Authorization: Bearer <Supabase access token>` in production. The teammate's Kano pilot can be queried using `GET /api/v1/oseas/assets?sourceDataset=osm_kano_pilot&bbox=34.60,-0.40,35.30,0.10`, then the returned feature ID with `/assets/{id}/exposure` and `/assets/{id}/vulnerability`. Map clients can use `/layers/asset_vulnerability/geojson?sourceDataset=osm_kano_pilot&bbox=...`; `/layers` lists that layer and its supported filters. Heat and wildfire records marked `not_assessed` remain unscored.
-
-The Blueprint currently selects Render's free instance to avoid starting a paid service without your pricing approval. Render's free web services spin down after 15 minutes idle and the next request can take about a minute to wake the service; this is suitable for a demo but not an always-on production SLA. Upgrade the service plan in Render for continuous availability. Render assigns the public service URL after the Blueprint is created and deployed; no local or temporary tunnel URL is used.
-
-## Earth Engine audit and ingestion
+## Check Earth Engine assets
 
 ```powershell
 npm run oseas:audit
-npm run oseas:ingest
+npm run oseas:catalog:audit
 ```
 
-Audit validates the configured assets and emits a JSON report without writing to PostGIS. Ingestion persists source rows in bounded pages and writes run, dataset version, and quality-check metadata. Missing optional assets are logged while other assets continue. The command exits `0` when all sources succeed, `2` for a partial run, and `1` when all sources fail or setup cannot start.
+The first checks configured feature assets and their schemas. The catalog audit smoke-checks selected public Earth Engine collections. Neither command ingests data or proves scientific validity.
 
-## Tests
+## Start services locally
 
-`npm test` runs JavaScript unit tests. `npm run test:oseas` runs isolated Python tests. `npm run lint` and `npm run build` check the API build. For current implementation limits and live checks, see [`INTEGRATION_READINESS.md`](INTEGRATION_READINESS.md).
+Start the API from `osea_data_pipe`:
+
+```powershell
+npm run dev
+```
+
+Start the frontend in a separate terminal:
+
+```powershell
+cd frontend
+npm ci
+npm run dev
+```
+
+The frontend's `VITE_API_PROXY_TARGET` can point the Vite proxy at a local API. No database or Earth Engine credential belongs in the browser. See [`../../frontend/README.md`](../../frontend/README.md).
+
+## Authentication and deployment
+
+In production, OSEAS API requests use a Supabase Auth bearer token by default. The backend verifies tokens using server-side Supabase configuration. `OSEAS_PUBLIC_READ_API=true` is an explicit exception for read-only GET routes; it does not make writes public. In development, auth is optional unless `OSEAS_REQUIRE_AUTH=true`.
+
+The repository-level `render.yaml` describes an API service; frontend deployment is separate. Configure `DB_URL`, Supabase credentials and `CORS_ORIGIN` in the backend host's secret settings. Keep service-role keys and database URLs out of Vercel/browser configuration. Deployment providers may have cold starts or ephemeral filesystems; verify the deployed service behavior rather than assuming local caches are shared.
+
+For command order, optional data workflows and safe recovery, see [`END_TO_END_RUNBOOK.md`](END_TO_END_RUNBOOK.md). For authentication response and route behavior, see [`API_CONTRACTS.md`](API_CONTRACTS.md).
 
 ## Common failures
 
-- **Authentication failure:** check `GEE_PROJECT_ID`, account permissions, key path, and the Earth Engine API enablement.
-- **Asset not found/access denied:** correct the related `GEE_ASSET_*` full ID and grant the service account read access.
-- **PostGIS/schema failure:** apply `database/schema.sql` in Supabase and check that the connection URL points to the OSEAS database.
-- **Geometry insert failure:** inspect the reported asset geometry; the importer expects a valid vector geometry convertible from GeoJSON.
-- **Partial ingestion:** rerun after correcting the source problem. Stable source identifiers and database uniqueness constraints make repeats idempotent.
+- **Earth Engine authentication failure:** check `GEE_PROJECT_ID`, account permissions, API enablement, and the service-account path if used.
+- **Asset missing or denied:** confirm the full `GEE_ASSET_*` value and grant the configured identity read access.
+- **Database connection/schema error:** verify the database URL and PostGIS extension, apply the current schema, and run `npm run db:setup`.
+- **Partial ingestion:** inspect the run and per-source quality results. Correct invalid geometries or source configuration before treating the inventory as complete.
+- **No map evidence:** check source retrieval state, processing-run status, API readiness, and the requested map filters. An empty layer is not automatically a zero-hazard result.
