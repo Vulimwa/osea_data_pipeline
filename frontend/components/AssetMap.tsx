@@ -42,6 +42,7 @@ type Props = {
   drawAreaRequest: number;
   clearAreaRequest: number;
   onSelect: (id: string) => void;
+  onExploreFloodEvidence: (eventKey: string) => void;
   onAreaResult: (results: SpatialResult[] | null) => void;
   onMapError: (message: string | null) => void;
 };
@@ -128,7 +129,11 @@ function popupValue(value: unknown) {
   return text.length > 96 ? `${text.slice(0, 93)}…` : text;
 }
 
-function makePopup(title: string, properties: Record<string, unknown>) {
+function makePopup(
+  title: string,
+  properties: Record<string, unknown>,
+  onExploreFloodEvidence?: (eventKey: string) => void,
+) {
   const attributes: Record<string, string | number | boolean | null> = {};
   for (const [key, value] of Object.entries(properties)) {
     attributes[key] = valueForPopup(value);
@@ -147,6 +152,11 @@ function makePopup(title: string, properties: Record<string, unknown>) {
     'assessmentPeriod',
     'assessmentPeriodStart',
     'assessmentPeriodEnd',
+    'eventKey',
+    'eventDate',
+    'datasetKey',
+    'evidenceKind',
+    'measuredGeometryAreaM2',
   ];
   const byNormalizedKey = new Map(
     Object.keys(properties).map((key) => [key.toLowerCase().replace(/[^a-z0-9]/g, ''), key]),
@@ -195,6 +205,16 @@ function makePopup(title: string, properties: Record<string, unknown>) {
     message.className = 'oseas-popup-empty';
     message.textContent = 'No additional evidence is recorded for this feature.';
     content.append(message);
+  }
+  const eventKey = properties.eventKey;
+  if (typeof eventKey === 'string' && eventKey && onExploreFloodEvidence) {
+    const exploreButton = document.createElement('calcite-button');
+    exploreButton.setAttribute('appearance', 'solid');
+    exploreButton.setAttribute('kind', 'brand');
+    exploreButton.setAttribute('scale', 's');
+    exploreButton.textContent = 'Explore evidence';
+    exploreButton.addEventListener('click', () => onExploreFloodEvidence(eventKey));
+    content.append(exploreButton);
   }
   return {
     attributes,
@@ -285,6 +305,7 @@ export function AssetMap({
   drawAreaRequest,
   clearAreaRequest,
   onSelect,
+  onExploreFloodEvidence,
   onAreaResult,
   onMapError,
 }: Props) {
@@ -294,10 +315,12 @@ export function AssetMap({
   const overlayLayersRef = useRef<OverlayLayers>(new Map());
   const sketchRef = useRef<SketchViewModel | null>(null);
   const onSelectRef = useRef(onSelect);
+  const onExploreFloodEvidenceRef = useRef(onExploreFloodEvidence);
   const onAreaResultRef = useRef(onAreaResult);
   const onMapErrorRef = useRef(onMapError);
   const overlaysRef = useRef(overlays);
   onSelectRef.current = onSelect;
+  onExploreFloodEvidenceRef.current = onExploreFloodEvidence;
   onAreaResultRef.current = onAreaResult;
   onMapErrorRef.current = onMapError;
   overlaysRef.current = overlays;
@@ -418,15 +441,21 @@ export function AssetMap({
         const properties = feature.properties ?? {};
         const id = String(feature.id ?? properties.energyAssetId ?? properties.administrativeUnitId ?? '');
         const title = String(properties.assetName ?? properties.name ?? properties.hazardType ?? overlay.title);
-        const popup = makePopup(title, {
-          ...properties,
-          featureId: feature.id ?? id,
-          ...(properties.energyAssetId
-            ? { __assetId: properties.energyAssetId }
-            : overlay.id === 'assets'
-              ? { __assetId: id }
-              : {}),
-        });
+        const popup = makePopup(
+          title,
+          {
+            ...properties,
+            featureId: feature.id ?? id,
+            ...(properties.energyAssetId
+              ? { __assetId: properties.energyAssetId }
+              : overlay.id === 'assets'
+                ? { __assetId: id }
+                : {}),
+          },
+          overlay.id === 'flood_reference'
+            ? (eventKey) => onExploreFloodEvidenceRef.current(eventKey)
+            : undefined,
+        );
         layer.add(
           new Graphic({
             geometry,

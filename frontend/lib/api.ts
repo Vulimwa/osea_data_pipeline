@@ -270,6 +270,15 @@ export async function fetchReferenceLayer(
   };
 }
 
+export function fetchFloodReferenceEvent(eventKey: string): Promise<GeoJsonCollection> {
+  const query = new URLSearchParams({
+    eventKey,
+    limit: '500',
+    offset: '0',
+  });
+  return getJson<GeoJsonCollection>(`/layers/flood_reference/geojson?${query.toString()}`);
+}
+
 export function withTimeout<T>(promise: Promise<T>, ms: number): Promise<T> {
   return new Promise((resolve, reject) => {
     const timer = setTimeout(() => reject(new Error(`API request timed out after ${ms / 1000} seconds`)), ms);

@@ -207,6 +207,7 @@ const defaultVisible: LayerId[] = [
   'assets',
   'asset_exposure',
   'asset_vulnerability',
+  'flood_reference',
   'prithvi_national_summaries',
 ];
 const defaultEmptyCollection: GeoJsonCollection = {
@@ -334,6 +335,9 @@ export function MapPage() {
           drawAreaRequest={drawAreaRequest}
           clearAreaRequest={clearAreaRequest}
           onSelect={setSelectedId}
+          onExploreFloodEvidence={(eventKey) =>
+            navigate(`/evidence/flood/${encodeURIComponent(eventKey)}`)
+          }
           onAreaResult={setSpatialResults}
           onMapError={setMapError}
         />

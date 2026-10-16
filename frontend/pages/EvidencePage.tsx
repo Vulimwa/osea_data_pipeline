@@ -7,8 +7,10 @@ import {
   fetchAssetExposure,
   fetchAssetServiceDependencies,
   fetchAssetVulnerability,
+  fetchFloodReferenceEvent,
   fetchPilotAssets,
   type AssetFeature,
+  type GeoJsonCollection,
 } from '../lib/api';
 
 function toneClass(label: string | null | undefined): string {
@@ -20,16 +22,42 @@ function toneClass(label: string | null | undefined): string {
   return '';
 }
 
+function asRecord(value: unknown): Record<string, unknown> {
+  return value != null && typeof value === 'object' && !Array.isArray(value)
+    ? (value as Record<string, unknown>)
+    : {};
+}
+
+function parameterLabel(value: string): string {
+  return value.replace(/([a-z0-9])([A-Z])/g, '$1 $2').replace(/[_-]/g, ' ');
+}
+
+function parameterValue(value: unknown): string {
+  const text =
+    value != null && typeof value === 'object' ? JSON.stringify(value) : String(value ?? '');
+  return text.length > 240 ? `${text.slice(0, 237)}…` : text;
+}
+
 export function EvidencePage() {
-  const { assetId } = useParams();
+  const { assetId, eventKey } = useParams();
   const navigate = useNavigate();
   const location = useLocation();
   const routedAsset = (location.state as { asset?: AssetFeature } | null)?.asset ?? null;
 
+  const floodReferenceQ = useQuery({
+    queryKey: ['flood-reference-event', eventKey],
+    enabled: Boolean(eventKey),
+    queryFn: async () => {
+      if (!eventKey) throw new Error('Flood reference event key is required.');
+      return fetchFloodReferenceEvent(eventKey);
+    },
+    retry: 1,
+  });
+
   const pilotQ = useQuery({
     queryKey: ['assets-pilot'],
     queryFn: fetchPilotAssets,
-    enabled: Boolean(assetId && !routedAsset),
+    enabled: Boolean(assetId && !eventKey && !routedAsset),
     retry: 1,
   });
 
@@ -37,7 +65,7 @@ export function EvidencePage() {
 
   const detailQ = useQuery({
     queryKey: ['asset-detail', assetId],
-    enabled: Boolean(assetId),
+    enabled: Boolean(assetId && !eventKey),
     queryFn: async () => {
       const id = assetId as string;
       const [exposure, vulnerability, criticality, dependencies] = await Promise.all([
@@ -49,6 +77,121 @@ export function EvidencePage() {
       return { exposure, vulnerability, criticality, dependencies };
     },
   });
+
+  if (eventKey) {
+    const eventFeature = floodReferenceQ.data?.features[0];
+    const properties = eventFeature?.properties ?? {};
+    const eventMetadata = asRecord(properties.eventMetadata);
+    const sourceProperties = asRecord(properties.sourceProperties);
+    const parameters = [
+      ...Object.entries(eventMetadata).map(([key, value]) => [`Event · ${parameterLabel(key)}`, value] as const),
+      ...Object.entries(sourceProperties).map(([key, value]) => [`Source · ${parameterLabel(key)}`, value] as const),
+    ].filter(([, value]) => value != null && value !== '');
+    const measuredArea = Number(properties.measuredGeometryAreaM2);
+
+    if (floodReferenceQ.isLoading) {
+      return (
+        <div className="asset-page page">
+          <calcite-loader label="Loading flood evidence" />
+        </div>
+      );
+    }
+
+    if (floodReferenceQ.error) {
+      return (
+        <div className="asset-page page">
+          <p className="kicker">Observed flood reference</p>
+          <h1>Evidence request failed</h1>
+          <calcite-notice open kind="danger" icon>
+            <div slot="message">
+              {floodReferenceQ.error instanceof Error
+                ? floodReferenceQ.error.message
+                : 'The API returned an error.'}
+            </div>
+          </calcite-notice>
+          <calcite-button appearance="outline" kind="neutral" onClick={() => navigate('/map')}>
+            Back to map
+          </calcite-button>
+        </div>
+      );
+    }
+
+    if (!eventFeature) {
+      return (
+        <div className="asset-page page">
+          <p className="kicker">Observed flood reference</p>
+          <h1>Flood event not found</h1>
+          <calcite-button appearance="outline" kind="neutral" onClick={() => navigate('/map')}>
+            Back to map
+          </calcite-button>
+        </div>
+      );
+    }
+
+    return (
+      <div className="asset-page page">
+        <p className="kicker">Observed flood reference · {String(properties.datasetKey ?? 'source dataset')}</p>
+        <h1>{String(properties.eventKey ?? eventKey)}</h1>
+        <p className="meta">
+          Reference observation
+          {properties.eventDate ? ` · ${String(properties.eventDate).slice(0, 10)}` : ''}
+          {eventFeature.geometry ? ` · ${eventFeature.geometry.type}` : ''}
+        </p>
+
+        <div className="cta-row">
+          <calcite-button appearance="outline" kind="neutral" onClick={() => navigate('/map?area=kano')}>
+            Back to Kano map
+          </calcite-button>
+        </div>
+
+        <div className="metrics">
+          <div className="metric">
+            <label>Source</label>
+            <div className="value">{String(eventMetadata.provider ?? 'Not recorded')}</div>
+          </div>
+          <div className="metric">
+            <label>Event date</label>
+            <div className="value">{String(properties.eventDate ?? 'Not recorded').slice(0, 10)}</div>
+          </div>
+          <div className="metric">
+            <label>Measured polygon area</label>
+            <div className="value">
+              {Number.isFinite(measuredArea)
+                ? `${(measuredArea / 1_000_000).toLocaleString(undefined, { maximumFractionDigits: 1 })} km²`
+                : 'Not recorded'}
+            </div>
+            <p className="note">Computed from the stored polygon geometry.</p>
+          </div>
+          <div className="metric">
+            <label>Field validation</label>
+            <div className="value">{String(eventMetadata.field_validation_status ?? 'Not recorded')}</div>
+          </div>
+        </div>
+
+        <calcite-notice open kind="warning" icon>
+          <div slot="title">Reference footprint, not an asset-loss assessment</div>
+          <div slot="message">
+            {String(
+              properties.limitations ??
+                'This observed flood footprint is not a forecast and does not confirm damage or outages.',
+            )}
+          </div>
+        </calcite-notice>
+
+        <calcite-block heading="Source parameters" open>
+          <calcite-list label="Flood event source parameters">
+            {parameters.map(([key, value]) => (
+              <calcite-list-item
+                key={key}
+                label={key}
+                description={parameterValue(value)}
+              />
+            ))}
+          </calcite-list>
+        </calcite-block>
+      </div>
+    );
+  }
 
   if (!assetId || (!asset && pilotQ.isLoading)) {
     return (
