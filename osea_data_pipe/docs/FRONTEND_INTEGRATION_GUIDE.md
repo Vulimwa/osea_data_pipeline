@@ -33,6 +33,8 @@ GET /layers/prithvi_national_summaries/geojson?bbox=west,south,east,north&limit=
 
 Web tile layers provide visualization. They do not provide queryable feature attributes, pixel identify, or zonal statistics. Feature popups and pixel values must come from an actual feature query or supported identify/query service. Do not read a raster value from its screen color.
 
+The CGF-ACI GEE processing is complete and its outputs are hosted, but pipeline integration remains future work. The tile endpoint can display those outputs; that display does not ingest them into PostGIS or turn them into OSEAS assessment records. See [`../../CGF_ACI.md`](../../CGF_ACI.md) for the demo's methods and limits.
+
 ## Interpretation
 
 - `not_assessed` means no usable persisted assessment is available for the requested scope; it does not mean zero hazard.

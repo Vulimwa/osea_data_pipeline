@@ -39,12 +39,12 @@ Read in this order:
 
 1. [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) — system components and data flow.
 2. [`docs/DATA_CATALOG.md`](docs/DATA_CATALOG.md) — source families and how to interpret retrieval state.
-3. [`docs/ASSESSMENT_METHODS.md`](docs/ASSESSMENT_METHODS.md) and [`docs/MODEL_CARD.md`](docs/MODEL_CARD.md) — implemented calculations, prototype scoring and limitations.
+3. [`docs/ASSESSMENT_METHODS.md`](docs/ASSESSMENT_METHODS.md), [`docs/MODEL_CARD.md`](docs/MODEL_CARD.md), [`docs/SCENARIO_CAT_MODEL.md`](docs/SCENARIO_CAT_MODEL.md) and [`../CGF_ACI.md`](../CGF_ACI.md) — OSEAS calculations, flood screening, the CAT model implemented in the linked vulnerability-workflow repository, and the separate CGF-ACI GEE demo.
 4. [`docs/SETUP.md`](docs/SETUP.md) and [`docs/END_TO_END_RUNBOOK.md`](docs/END_TO_END_RUNBOOK.md) — configuration and execution.
 5. [`docs/PIPELINE_CONTRACTS.md`](docs/PIPELINE_CONTRACTS.md) and [`docs/API_CONTRACTS.md`](docs/API_CONTRACTS.md) — stage outputs and API response contracts.
 6. [`docs/FRONTEND_INTEGRATION_GUIDE.md`](docs/FRONTEND_INTEGRATION_GUIDE.md) — map integration and API usage.
 
-[`../outputs.md`](../outputs.md) is the concise description of project scope and deliverables.
+[`../OUTPUTS.md`](../OUTPUTS.md) is the concise description of project scope and deliverables.
 
 ## Validation
 

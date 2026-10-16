@@ -30,10 +30,12 @@ OSEAS contains two flood/water candidate workflows. Both are screening tools. Ne
 
 **Validation:** a checkpoint setup smoke test confirms the inference package can run on its sample. That is not geographic validation. Kenya-specific independent precision, recall and IoU have not been established. See [`ASSESSMENT_METHODS.md`](ASSESSMENT_METHODS.md) for interpretation requirements.
 
-## CGF-ACI is a separate prototype
+## CGF-ACI is outside the OSEAS pipeline
 
-The hackathon CGF-ACI (Cascade Grid Failure and Asset Criticality Index) script is not the Prithvi model and is not a production OSEAS score. It combines min-max normalized 2025 CHIRPS 95th-percentile rainfall and ERA5-Land maximum temperature at 60/40 weights, applies assumed asset-type multipliers, and averages substation values by ward. It may help direct exploratory investigation, but it is not a failure probability. The method has no validated topology, outage history, calibrated asset weights or independent outcome validation. See [`ASSESSMENT_METHODS.md`](ASSESSMENT_METHODS.md).
+CGF-ACI is a standalone Google Earth Engine demo that has been processed and exported to hosted assets. It is not an OSEAS processing stage, a Prithvi model or a production score. Its outputs can be visualized through the separate tile-map integration, but the GEE calculation is not orchestrated by OSEAS and its scores are not OSEAS assessment records. Integrating the completed GEE work into the pipeline is future work. The current script combines normalized CHIRPS rainfall and ERA5-Land daily maximum temperature, applies assumed weights to substations and existing mini-grids, and averages assessed substation scores by ward. It does not model electrical cascade propagation, outages, or equipment failure. See the detailed [CGF-ACI GEE note](../../CGF_ACI.md) and [`ASSESSMENT_METHODS.md`](ASSESSMENT_METHODS.md).
 
 ## Use and reporting
 
 Always report the source period, spatial coverage, run status and candidate status. Do not present an empty result as proof of no flood, a screening candidate as confirmed inundation, or an asset intersection as failure or outage. Check the latest run and data-quality records before using any output.
+
+The Kano Plains interface is a pilot view, not evidence that this repository's flood-screening workflows perform a return-period CAT calculation. The CAT model is implemented in the separate [vulnerability-workflow repository](https://github.com/Nosh-thee-techy/oseas26-climate-risk-infrastructure-vulnerability); see [`SCENARIO_CAT_MODEL.md`](SCENARIO_CAT_MODEL.md) for the distinction from CGF-ACI and this repository's screening outputs.

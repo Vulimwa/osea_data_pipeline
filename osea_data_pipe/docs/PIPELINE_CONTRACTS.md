@@ -1,43 +1,44 @@
-# OSEAS pipeline contracts
+# Pipeline stages and acceptance
 
-This document records the actual stage boundaries implemented in the repository. The current orchestrator is `npm run oseas:pipeline`; see [`END_TO_END_RUNBOOK.md`](END_TO_END_RUNBOOK.md) for commands. A stage being callable or having a table does not mean its output is populated or accepted.
+A stage is accepted only when its prerequisites are met, its run reaches a terminal state, and its output passes the checks listed below. Having a command, table, route or catalog entry does not prove that usable data exist.
 
 ## Stage contracts
 
-| Stage / entry point | Inputs and prerequisites | Durable outputs | Acceptance condition |
-|---|---|---|---|
-| Earth Engine source audit — `npm run oseas:audit` | `GEE_PROJECT_ID`, Earth Engine authentication, configured `GEE_ASSET_*` table IDs. | None; audit only. | Every selected asset is accessible, is a table, and reports usable sample/schema metadata. Audit success does not prove a full ingest. |
-| Infrastructure/source ingestion — `npm run oseas:ingest` / `python -m oseas.ingest` | Earth Engine access, DB URL, applied `database/schema.sql`; optional `--datasets` limits source keys. | `energy_assets`, `critical_services`, `administrative_units`, typed asset tables, hydrography/reference tables, `datasets`, `dataset_versions`, `ingestion_runs`, `data_quality_checks`. | All source pages have been fetched and validated; valid records upsert by `(dataset_key, source_feature_id)`, skipped/unusable geometries are counted, run status is terminal and source-level failures are reviewed. |
-| Asset/admin assignment — `npm run oseas:assign-admin` | Persisted assets and county/ward geometries. | `asset_admin_assignments` with relation method and clipped length/area where applicable. | Assignment refresh completes; point/line/polygon semantics are correct; assigned/unassigned denominators reconcile against current inputs. |
-| UNOSAT reference import — `npm run oseas:flood:unosat:ingest` | Bundled local shapefiles and applied schema. | Source-preserving rows in `flood_reference_features`, dataset/run/version/quality evidence. | Expected files validate; geometries and source keys are checked; source validation caveat remains in provenance. |
-| Sentinel-1 flood screen — `npm run oseas:flood:screen -- ...` | Explicit bbox, event and baseline windows, Earth Engine, source inventory; limits and coverage gates documented in the runbook. | Modeled candidate `hazard_events`/`flood_extents`, positive `asset_hazard_exposure`, AOI-limited administrative summaries, model/run/coverage/quality metadata. | Windows and same-orbit inputs are valid; source/valid coverage gates pass; geospatial output is valid and linked to a run. Scientific validation is a separate gate. |
-| Bounded Prithvi pilot — `npm run oseas:prithvi:flood -- ...` | Pinned Sentinel-2 model/checkpoint, Earth Engine scene, <=5 km² AOI, dates, applied schema. | Modeled flood-candidate event, positive intersections, AOI-local summaries and run artifacts. | Correct six optical channels, clear-pixel and georeferencing checks pass; output is candidate evidence. Kenya accuracy remains unvalidated. |
-| Nationwide Prithvi — `npm run oseas:prithvi:national` or configured `npm run oseas:run` | Pinned model/checkpoint, all 47 county geometries, ward geometries, Earth Engine access, event dates, additive schema. Resumable 512×512 chips use 10 m pixels and a 64-pixel overlap by default; only the non-overlapping core contributes to statistics. | `prithvi_national_batches`, `prithvi_national_admin_batch_stats`, and `administrative_hazard_summaries` with county/ward candidate and valid-pixel totals, area-derived coverage, periods, run/model provenance. Read through `prithvi_national_summaries` and administrative summary APIs. Temporary chips are removed; no national source/prediction raster is retained. | Tile grid and CRS/transform are checked; tile-level clear coverage, JRC/lake masks and resumable status are recorded. Incomplete or unobserved tiles keep run/admin status partial or insufficient. Candidate pixels are not verified inundation and Kenya accuracy remains unvalidated. |
-| CHIRPS event rainfall — `npm run oseas:rainfall` | Dated flood-reference events, county/ward geometries, Earth Engine source access. | `climate_observations` with 30-day totals, absolute/percentage anomaly, source checksum, quality, coverage and run provenance. | Totals/anomalies use correct event/date baseline; null percent change for zero baseline; missing coverage not coerced to zero. This is context, not a flood label. |
-| NASA POWER heat — `npm run oseas:heat` | Bounded start/end, NASA POWER availability and existing inventory/administrative data for exposure context. | Climate observations, source version/run metadata, grid events, exposure and administrative summary records. | Daily values and baseline periods/units are recorded; missing periods remain explicit; result is described as coarse near-surface air-temperature exposure, not LST or outage. |
-| Black Marble — `npm run oseas:nightlights` | Earth Engine access; a complete-month interval checked against live product availability; inventory/admin/service geometries. | Monthly radiance observations and zone summaries with quality/validity, provenance, source dates and run metadata. | Requested intervals and all zone/month outputs reconcile; true zero remains distinct from missing; complete persisted rows and terminal run are verified. No completed run was found in this audit. |
-| FIRMS active fire — `npm run oseas:fire` | Server-side `NASA_FIRMS_MAP_KEY`, Kenya county boundary, sensor/date settings. | Fire point events, source-version/run/coverage metadata and optional asset-proximity exposure. | Response schema/coverage is validated, points are clipped to Kenya, query hash/provenance retained; zero detections are not interpreted as no fire. |
-| WorldPop exposure — `npm run oseas:population:persist` | Validated 2024 raster, UNOSAT reference footprints, administrative geometries and schema. | `population_exposure_assessments`, coverage and quality/provenance. | Raster checksum/reference year and valid cell fraction are stored; overlapping features do not double-count cells; no valid cells is unknown, not measured zero. |
-| Evidence assessment — `npm run oseas:assessments` | Current assets, assignments, exposure records, verified dependency records, database schema. | Criticality/dependency/vulnerability/resilience dimension rows, county/ward summaries, unranked intervention review candidates, run metadata. | Stable evidence-derived IDs; complete run denominator; unsupported score dimensions remain null/unknown; summary counts reconcile. |
-| Read-only API — `/api/v1/oseas/*` | Installed schema, database access; bearer-token verification in production/configured auth. | No writes. Serves current durable rows, catalog, quality and run provenance. | Request validation, filters, pagination, GeoJSON/CRS, error envelope, null/missing states, authorization and layer totals match [`API_CONTRACTS.md`](API_CONTRACTS.md). |
+| Stage | Entry point | Main outputs | Acceptance checks |
+| --- | --- | --- | --- |
+| Database setup | Apply `database/schema.sql`; `npm run db:setup` | OSEAS PostGIS schema and connectivity report | Required tables/extensions are present and API/database connections work. The check command does not apply schema. |
+| Source audit | `npm run oseas:audit` | Audit report only | Configured assets are accessible, expected types/geometries and usable properties are confirmed. No database writes. |
+| Catalog audit | `npm run oseas:catalog:audit` | Bounded source smoke-check report | Selected source is accessible for the checked place/date and expected bands are present. This does not establish full spatial/temporal coverage or persist data. |
+| Inventory ingestion | `npm run oseas:ingest` | Source inventory, dataset versions, ingestion runs and quality checks | Every source has a terminal status; valid features are upserted by stable identifiers; skipped geometries and partial results are reviewed. |
+| Administrative assignment | `npm run oseas:assign-admin` | Asset-to-county/ward assignments | Current boundaries exist; assigned/unassigned totals and spatial relation methods are reviewed. |
+| CHIRPS summaries | `npm run oseas:rainfall` | Event-window rainfall totals/anomalies and provenance | Event dates, baseline window, unit, valid image coverage and reporting-unit results reconcile. |
+| NASA POWER heat | `npm run oseas:heat` | Daily observations, baseline comparisons and supported exposure summaries | Period, variable, units, baseline and grid coverage are recorded; output remains coarse-air-temperature context. |
+| VIIRS nighttime radiance | `npm run oseas:nightlights` | Quality-aware monthly radiance summaries | Full month selection, quality mask, valid observations, tile coverage, periods and persisted run are confirmed. |
+| FIRMS fire | `npm run oseas:fire` | Active-fire events and optional proximity evidence | API response and date/sensor scope are recorded; returned points are clipped to Kenya. A zero count is not proof of no fire. |
+| WorldPop exposure | `npm run oseas:population:persist` | Population estimates within reference footprints and administrative intersections | Raster checksum/year, geometry fingerprint, valid-cell fraction and duplicate-cell handling are checked. |
+| Flood screen | `npm run oseas:flood:screen` | Candidate polygons, positive asset intersections and bounded summaries | Event/baseline windows, orbit, coverage, masks, geometry and provenance pass. Candidate output remains unvalidated evidence. |
+| Prithvi inference | `npm run oseas:prithvi:flood` or `npm run oseas:prithvi:national` | Bounded candidate polygons or nationwide admin pixel summaries | Correct checkpoint/input bands and tile/coverage handling are verified. Kenya accuracy remains unvalidated. |
+| Evidence assessment | `npm run oseas:assessments` | Asset, dependency, criticality, vulnerability, resilience and admin summary records | Run denominators reconcile; missing inputs remain explicit; unsupported numeric scores stay null/withheld. |
+| Read API | `/api/v1/oseas/*` | Read-only JSON and GeoJSON responses | Validation, pagination, status, CRS, auth and provenance match [`API_CONTRACTS.md`](API_CONTRACTS.md). |
 
-## Canonical database interfaces
+## Persistence and retry behavior
 
-- Source inventory: `datasets`, `dataset_versions`, `energy_assets`, `critical_services`, `administrative_units`, `network_lines`, `substations`, `distribution_transformers`, `power_stations`, `mini_grids`.
-- Run and quality: `ingestion_runs`, `model_runs`, `data_quality_checks`, `assessment_provenance`, `spatial_coverage_assessments`.
-- Evidence: `flood_reference_features`, `hydrography_features`, `climate_observations`, `hazard_events`, `flood_extents`, `fire_events`, `asset_hazard_exposure`, `population_exposure_assessments`.
-- Decisions and reporting: `service_dependencies`, `service_dependency_assessments`, `asset_criticality_assessments`, `asset_vulnerability_assessments`, `grid_resilience_assessments`, `administrative_hazard_summaries`, `ward_vulnerability_summary`, `county_vulnerability_summary`, `intervention_scenarios`.
+Inventory and many derived outputs use stable keys and idempotent upserts. Rerunning a stage should reconcile the same inputs rather than duplicate them, but it does not necessarily delete rows that are no longer present upstream. Inspect the stage's run and source-version records to understand what changed.
 
-Schema presence is not acceptance evidence. Some records have per-stage provenance, while a universal assessment versioning/quality framework, verified feeder topology, outage history and populated scenario comparisons are still absent.
+Page-level writes may leave committed pages when a later page fails. A `partial` run must be reviewed at the source/stage level before downstream processing. Do not assume earlier successful rows make a failed stage complete.
 
-## Cross-stage acceptance gates
+## Coverage and interpretation gates
 
-1. A failed source or assessment remains a failed/partial run; it is never an empty-success fallback.
-2. Page-level writes and deterministic source keys permit safe retry, but a run is not atomic across all source pages. Consumers must use per-source run status and provenance.
-3. Invalid geometry, schema/CRS mismatch and required-input gaps are counted or surfaced; they are not silently converted into zero exposure.
-4. Every modelled output is distinguished from source-observed evidence and includes the input period, method/version and limitations.
-5. Summaries keep assessed/unknown denominators and valid observation coverage. Uncovered geography is not assigned zero hazard.
-6. The API serves only stored outputs and carries run/source/quality metadata; UI claims cannot exceed those API semantics.
-7. End-to-end acceptance requires a terminal orchestrator report, read-back of output counts and uniqueness, current source assignments and successful API contract tests. These conditions were not all met at audit time.
+1. Failed credentials, missing sources, invalid periods and schema errors must surface as failed or blocked stages, not empty success.
+2. Partial spatial or temporal coverage must remain visible in result status and provenance.
+3. Unknown or unassessed areas are not assigned zero hazard.
+4. Hazard candidates, observations, exposure records and assessment interpretations remain separate evidence types.
+5. A geometry intersection does not establish asset condition, network connectivity or service dependency.
+6. Production composite scores remain withheld when supported inputs or validation are missing.
+7. Every presentation of a result should identify its source period, method and current processing status.
 
-See [`PIPELINE_AUDIT.md`](PIPELINE_AUDIT.md) for stage statuses and blockers; [`ASSESSMENT_METHODS.md`](ASSESSMENT_METHODS.md) for the six indicator definitions; [`DATA_CATALOG.md`](DATA_CATALOG.md) for source specifics.
+The `intervention_scenarios` records currently represent evidence-led candidates for review, not modeled intervention effects. Scenario/CAT impact calculations are a proposed extension; see [`SCENARIO_CAT_MODEL.md`](SCENARIO_CAT_MODEL.md).
+
+## Storage interfaces
+
+Core source and output tables include `energy_assets`, `critical_services`, `administrative_units`, `network_lines`, `datasets`, `dataset_versions`, `ingestion_runs`, `data_quality_checks`, `hazard_events`, `flood_extents`, `climate_observations`, `asset_hazard_exposure`, `population_exposure_assessments`, `service_dependency_assessments`, `asset_criticality_assessments`, `asset_vulnerability_assessments`, `grid_resilience_assessments`, administrative summary tables and `intervention_scenarios`. The complete schema is in [`../database/schema.sql`](../database/schema.sql).
