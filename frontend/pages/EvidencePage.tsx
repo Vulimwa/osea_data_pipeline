@@ -7,10 +7,9 @@ import {
   fetchAssetExposure,
   fetchAssetServiceDependencies,
   fetchAssetVulnerability,
-  fetchFloodReferenceEvent,
+  fetchAdministrativeSummary,
   fetchPilotAssets,
   type AssetFeature,
-  type GeoJsonCollection,
 } from '../lib/api';
 
 function toneClass(label: string | null | undefined): string {
@@ -39,17 +38,18 @@ function parameterValue(value: unknown): string {
 }
 
 export function EvidencePage() {
-  const { assetId, eventKey } = useParams();
+  const { assetId, level, unitId } = useParams();
   const navigate = useNavigate();
   const location = useLocation();
   const routedAsset = (location.state as { asset?: AssetFeature } | null)?.asset ?? null;
+  const administrativeLevel = level === 'ward' || level === 'county' ? level : null;
 
-  const floodReferenceQ = useQuery({
-    queryKey: ['flood-reference-event', eventKey],
-    enabled: Boolean(eventKey),
+  const administrativeSummaryQ = useQuery({
+    queryKey: ['administrative-summary', administrativeLevel, unitId],
+    enabled: Boolean(administrativeLevel && unitId),
     queryFn: async () => {
-      if (!eventKey) throw new Error('Flood reference event key is required.');
-      return fetchFloodReferenceEvent(eventKey);
+      if (!administrativeLevel || !unitId) throw new Error('Administrative unit is required.');
+      return fetchAdministrativeSummary(administrativeLevel, unitId);
     },
     retry: 1,
   });
@@ -57,7 +57,7 @@ export function EvidencePage() {
   const pilotQ = useQuery({
     queryKey: ['assets-pilot'],
     queryFn: fetchPilotAssets,
-    enabled: Boolean(assetId && !eventKey && !routedAsset),
+    enabled: Boolean(assetId && !unitId && !routedAsset),
     retry: 1,
   });
 
@@ -65,7 +65,7 @@ export function EvidencePage() {
 
   const detailQ = useQuery({
     queryKey: ['asset-detail', assetId],
-    enabled: Boolean(assetId && !eventKey),
+    enabled: Boolean(assetId && !unitId),
     queryFn: async () => {
       const id = assetId as string;
       const [exposure, vulnerability, criticality, dependencies] = await Promise.all([
@@ -78,34 +78,42 @@ export function EvidencePage() {
     },
   });
 
-  if (eventKey) {
-    const eventFeature = floodReferenceQ.data?.features[0];
-    const properties = eventFeature?.properties ?? {};
-    const eventMetadata = asRecord(properties.eventMetadata);
-    const sourceProperties = asRecord(properties.sourceProperties);
-    const parameters = [
-      ...Object.entries(eventMetadata).map(([key, value]) => [`Event · ${parameterLabel(key)}`, value] as const),
-      ...Object.entries(sourceProperties).map(([key, value]) => [`Source · ${parameterLabel(key)}`, value] as const),
-    ].filter(([, value]) => value != null && value !== '');
-    const measuredArea = Number(properties.measuredGeometryAreaM2);
+  if (unitId && administrativeLevel) {
+    const properties = administrativeSummaryQ.data?.properties;
+    const vulnerabilitySummary = asRecord(properties?.vulnerabilitySummary);
+    const assetCounts = asRecord(vulnerabilitySummary.assetCounts);
+    const hazardCounts = asRecord(vulnerabilitySummary.hazardCounts);
+    const provenance = asRecord(vulnerabilitySummary.provenance);
+    const missingEvidence = Array.isArray(provenance.missingEvidence)
+      ? provenance.missingEvidence
+      : [];
+    const hazardRows = Object.entries(hazardCounts).map(([hazard, value]) => {
+      const counts = asRecord(value);
+      return {
+        hazard,
+        exposed: Number(counts.exposedAssets ?? 0),
+        unknown: Number(counts.unknownAssets ?? 0),
+        measured: Number(counts.measuredAssets ?? 0),
+      };
+    });
 
-    if (floodReferenceQ.isLoading) {
+    if (administrativeSummaryQ.isLoading) {
       return (
         <div className="asset-page page">
-          <calcite-loader label="Loading flood evidence" />
+          <calcite-loader label="Loading area evidence" />
         </div>
       );
     }
 
-    if (floodReferenceQ.error) {
+    if (administrativeSummaryQ.error) {
       return (
         <div className="asset-page page">
-          <p className="kicker">Observed flood reference</p>
+          <p className="kicker">Administrative evidence</p>
           <h1>Evidence request failed</h1>
           <calcite-notice open kind="danger" icon>
             <div slot="message">
-              {floodReferenceQ.error instanceof Error
-                ? floodReferenceQ.error.message
+              {administrativeSummaryQ.error instanceof Error
+                ? administrativeSummaryQ.error.message
                 : 'The API returned an error.'}
             </div>
           </calcite-notice>
@@ -116,11 +124,11 @@ export function EvidencePage() {
       );
     }
 
-    if (!eventFeature) {
+    if (!properties) {
       return (
         <div className="asset-page page">
-          <p className="kicker">Observed flood reference</p>
-          <h1>Flood event not found</h1>
+          <p className="kicker">Administrative evidence</p>
+          <h1>Area evidence not found</h1>
           <calcite-button appearance="outline" kind="neutral" onClick={() => navigate('/map')}>
             Back to map
           </calcite-button>
@@ -130,12 +138,18 @@ export function EvidencePage() {
 
     return (
       <div className="asset-page page">
-        <p className="kicker">Observed flood reference · {String(properties.datasetKey ?? 'source dataset')}</p>
-        <h1>{String(properties.eventKey ?? eventKey)}</h1>
+        <p className="kicker">
+          {administrativeLevel} evidence summary · {String(properties.stableCode ?? unitId)}
+        </p>
+        <h1>{String(properties.name ?? `${administrativeLevel} area`)}</h1>
         <p className="meta">
-          Reference observation
-          {properties.eventDate ? ` · ${String(properties.eventDate).slice(0, 10)}` : ''}
-          {eventFeature.geometry ? ` · ${eventFeature.geometry.type}` : ''}
+          {String(vulnerabilitySummary.status ?? 'not assessed')}
+          {vulnerabilitySummary.periodStart
+            ? ` · ${String(vulnerabilitySummary.periodStart).slice(0, 10)}`
+            : ''}
+          {vulnerabilitySummary.periodEnd
+            ? ` to ${String(vulnerabilitySummary.periodEnd).slice(0, 10)}`
+            : ''}
         </p>
 
         <div className="cta-row">
@@ -146,48 +160,79 @@ export function EvidencePage() {
 
         <div className="metrics">
           <div className="metric">
-            <label>Source</label>
-            <div className="value">{String(eventMetadata.provider ?? 'Not recorded')}</div>
+            <label>Assigned assets</label>
+            <div className="value">{String(assetCounts.assignedAssets ?? '—')}</div>
           </div>
           <div className="metric">
-            <label>Event date</label>
-            <div className="value">{String(properties.eventDate ?? 'Not recorded').slice(0, 10)}</div>
-          </div>
-          <div className="metric">
-            <label>Measured polygon area</label>
+            <label>Measured hazard records</label>
             <div className="value">
-              {Number.isFinite(measuredArea)
-                ? `${(measuredArea / 1_000_000).toLocaleString(undefined, { maximumFractionDigits: 1 })} km²`
-                : 'Not recorded'}
+              {String(assetCounts.assetsWithMeasuredHazardExposure ?? '—')}
             </div>
-            <p className="note">Computed from the stored polygon geometry.</p>
           </div>
           <div className="metric">
-            <label>Field validation</label>
-            <div className="value">{String(eventMetadata.field_validation_status ?? 'Not recorded')}</div>
+            <label>Unknown exposure</label>
+            <div className="value">{String(assetCounts.assetsWithUnknownExposure ?? '—')}</div>
+          </div>
+          <div className="metric">
+            <label>Candidate exposure</label>
+            <div className="value">{String(assetCounts.assetsWithCandidateExposure ?? '—')}</div>
           </div>
         </div>
 
         <calcite-notice open kind="warning" icon>
-          <div slot="title">Reference footprint, not an asset-loss assessment</div>
+          <div slot="title">Composite vulnerability score withheld</div>
           <div slot="message">
             {String(
-              properties.limitations ??
-                'This observed flood footprint is not a forecast and does not confirm damage or outages.',
+              provenance.interpretation ??
+                'Area summaries report stored asset and hazard evidence. Missing evidence is not zero risk.',
             )}
           </div>
         </calcite-notice>
 
-        <calcite-block heading="Source parameters" open>
-          <calcite-list label="Flood event source parameters">
-            {parameters.map(([key, value]) => (
+        <calcite-block heading="Hazard evidence" open>
+          {hazardRows.length ? (
+            <calcite-list label="Hazard exposure counts">
+              {hazardRows.map((row) => (
+                <calcite-list-item
+                  key={row.hazard}
+                  label={parameterLabel(row.hazard)}
+                  description={`${row.exposed} exposed · ${row.unknown} unknown · ${row.measured} measured`}
+                />
+              ))}
+            </calcite-list>
+          ) : (
+            <calcite-notice open kind="info" icon>
+              <div slot="message">No hazard-specific counts are recorded for this area.</div>
+            </calcite-notice>
+          )}
+        </calcite-block>
+
+        <calcite-block heading="Assessment parameters" open>
+          <calcite-list label="Area assessment parameters">
+            {Object.entries({
+              summaryStatus: vulnerabilitySummary.status,
+              periodStart: vulnerabilitySummary.periodStart,
+              periodEnd: vulnerabilitySummary.periodEnd,
+              confidence: vulnerabilitySummary.confidence,
+              method: provenance.method,
+              assessmentRunId: provenance.assessmentRunId,
+              systemClassMethod: provenance.systemClassMethod,
+            })
+              .filter(([, value]) => value != null && value !== '')
+              .map(([key, value]) => (
               <calcite-list-item
                 key={key}
-                label={key}
+                label={parameterLabel(key)}
                 description={parameterValue(value)}
               />
-            ))}
+              ))}
           </calcite-list>
+          {missingEvidence.length > 0 && (
+            <calcite-notice open kind="info" icon>
+              <div slot="title">Missing evidence</div>
+              <div slot="message">{missingEvidence.map(String).join(' · ')}</div>
+            </calcite-notice>
+          )}
         </calcite-block>
       </div>
     );

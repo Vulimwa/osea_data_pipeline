@@ -42,7 +42,8 @@ type Props = {
   drawAreaRequest: number;
   clearAreaRequest: number;
   onSelect: (id: string) => void;
-  onExploreFloodEvidence: (eventKey: string) => void;
+  onExploreAssetEvidence: (assetId: string) => void;
+  onExploreAreaEvidence: (level: 'ward' | 'county', unitId: string) => void;
   onAreaResult: (results: SpatialResult[] | null) => void;
   onMapError: (message: string | null) => void;
 };
@@ -132,7 +133,8 @@ function popupValue(value: unknown) {
 function makePopup(
   title: string,
   properties: Record<string, unknown>,
-  onExploreFloodEvidence?: (eventKey: string) => void,
+  onExploreAssetEvidence?: (assetId: string) => void,
+  onExploreAreaEvidence?: (level: 'ward' | 'county', unitId: string) => void,
 ) {
   const attributes: Record<string, string | number | boolean | null> = {};
   for (const [key, value] of Object.entries(properties)) {
@@ -152,11 +154,11 @@ function makePopup(
     'assessmentPeriod',
     'assessmentPeriodStart',
     'assessmentPeriodEnd',
-    'eventKey',
-    'eventDate',
-    'datasetKey',
-    'evidenceKind',
-    'measuredGeometryAreaM2',
+    'summaryStatus',
+    'scoreStatus',
+    'level',
+    'periodStart',
+    'periodEnd',
   ];
   const byNormalizedKey = new Map(
     Object.keys(properties).map((key) => [key.toLowerCase().replace(/[^a-z0-9]/g, ''), key]),
@@ -206,14 +208,29 @@ function makePopup(
     message.textContent = 'No additional evidence is recorded for this feature.';
     content.append(message);
   }
-  const eventKey = properties.eventKey;
-  if (typeof eventKey === 'string' && eventKey && onExploreFloodEvidence) {
+  const energyAssetId = properties.energyAssetId;
+  if (typeof energyAssetId === 'string' && energyAssetId && onExploreAssetEvidence) {
     const exploreButton = document.createElement('calcite-button');
     exploreButton.setAttribute('appearance', 'solid');
     exploreButton.setAttribute('kind', 'brand');
     exploreButton.setAttribute('scale', 's');
     exploreButton.textContent = 'Explore evidence';
-    exploreButton.addEventListener('click', () => onExploreFloodEvidence(eventKey));
+    exploreButton.addEventListener('click', () => onExploreAssetEvidence(energyAssetId));
+    content.append(exploreButton);
+  }
+  const unitId = properties.administrativeUnitId;
+  const level = properties.level ?? properties.summaryUnit;
+  if (
+    typeof unitId === 'string' &&
+    (level === 'ward' || level === 'county') &&
+    onExploreAreaEvidence
+  ) {
+    const exploreButton = document.createElement('calcite-button');
+    exploreButton.setAttribute('appearance', 'solid');
+    exploreButton.setAttribute('kind', 'brand');
+    exploreButton.setAttribute('scale', 's');
+    exploreButton.textContent = 'Explore evidence';
+    exploreButton.addEventListener('click', () => onExploreAreaEvidence(level, unitId));
     content.append(exploreButton);
   }
   return {
@@ -254,6 +271,24 @@ function symbolFor(
       });
     }
     if (['prithvi_national_summaries', 'administrative_summaries', 'vulnerability_summaries'].includes(layerId)) {
+      if (layerId === 'vulnerability_summaries') {
+        const hazardCounts = properties.hazardCounts;
+        const hazards =
+          hazardCounts != null && typeof hazardCounts === 'object'
+            ? Object.values(hazardCounts as Record<string, unknown>)
+            : [];
+        const hasExposedAssets = hazards.some((hazard) => {
+          if (hazard == null || typeof hazard !== 'object') return false;
+          return Number((hazard as Record<string, unknown>).exposedAssets ?? 0) > 0;
+        });
+        return new SimpleFillSymbol({
+          color: hasExposedAssets ? [224, 107, 45, 0.28] : [109, 155, 181, 0.12],
+          outline: {
+            color: hasExposedAssets ? [240, 164, 106, 0.95] : [145, 190, 210, 0.8],
+            width: 1,
+          },
+        });
+      }
       const hasCandidates = Number(properties.candidateFraction ?? properties.candidateExposureFraction ?? 0) > 0;
       return new SimpleFillSymbol({
         color: hasCandidates ? [224, 107, 45, 0.26] : [142, 151, 164, 0.12],
@@ -279,7 +314,29 @@ function symbolFor(
       outline: { color: [255, 235, 220, 0.8], width: 0.7 },
     });
   }
-  if (['assets', 'asset_exposure', 'asset_vulnerability', 'asset_criticality', 'interventions'].includes(layerId)) {
+  if (layerId === 'asset_vulnerability') {
+    const score = Number(properties.score);
+    const vulnerabilityClass = String(properties.vulnerabilityClass ?? '').toLowerCase();
+    const color =
+      vulnerabilityClass === 'high' || vulnerabilityClass === 'very_high'
+        ? [213, 72, 55, 1]
+        : vulnerabilityClass === 'moderate'
+          ? [235, 151, 64, 1]
+          : vulnerabilityClass === 'low'
+            ? [71, 155, 136, 1]
+            : Number.isFinite(score) && score >= 0.67
+              ? [213, 72, 55, 1]
+              : Number.isFinite(score) && score >= 0.34
+                ? [235, 151, 64, 1]
+                : [150, 158, 166, 0.9];
+    return new SimpleMarkerSymbol({
+      style: 'circle',
+      color,
+      size: selected ? 13 : 10,
+      outline: { color: [248, 242, 232, 0.95], width: selected ? 1.8 : 1 },
+    });
+  }
+  if (['assets', 'asset_exposure', 'asset_criticality', 'interventions'].includes(layerId)) {
     const isPilot = properties.sourceDataset === 'osm_kano_pilot';
     const isExposed = ['exposed', 'candidate'].includes(String(properties.exposureStatus ?? '').toLowerCase());
     const fill = isExposed ? [240, 132, 66, 1] : isPilot ? [239, 173, 98, 1] : [82, 179, 174, 0.9];
@@ -305,7 +362,8 @@ export function AssetMap({
   drawAreaRequest,
   clearAreaRequest,
   onSelect,
-  onExploreFloodEvidence,
+  onExploreAssetEvidence,
+  onExploreAreaEvidence,
   onAreaResult,
   onMapError,
 }: Props) {
@@ -315,12 +373,14 @@ export function AssetMap({
   const overlayLayersRef = useRef<OverlayLayers>(new Map());
   const sketchRef = useRef<SketchViewModel | null>(null);
   const onSelectRef = useRef(onSelect);
-  const onExploreFloodEvidenceRef = useRef(onExploreFloodEvidence);
+  const onExploreAssetEvidenceRef = useRef(onExploreAssetEvidence);
+  const onExploreAreaEvidenceRef = useRef(onExploreAreaEvidence);
   const onAreaResultRef = useRef(onAreaResult);
   const onMapErrorRef = useRef(onMapError);
   const overlaysRef = useRef(overlays);
   onSelectRef.current = onSelect;
-  onExploreFloodEvidenceRef.current = onExploreFloodEvidence;
+  onExploreAssetEvidenceRef.current = onExploreAssetEvidence;
+  onExploreAreaEvidenceRef.current = onExploreAreaEvidence;
   onAreaResultRef.current = onAreaResult;
   onMapErrorRef.current = onMapError;
   overlaysRef.current = overlays;
@@ -440,7 +500,13 @@ export function AssetMap({
         if (!geometry) continue;
         const properties = feature.properties ?? {};
         const id = String(feature.id ?? properties.energyAssetId ?? properties.administrativeUnitId ?? '');
-        const title = String(properties.assetName ?? properties.name ?? properties.hazardType ?? overlay.title);
+        const title = String(
+          properties.assetName ??
+            properties.name ??
+            (properties.level ? `${properties.level} ${properties.stableCode ?? ''}`.trim() : null) ??
+            properties.hazardType ??
+            overlay.title,
+        );
         const popup = makePopup(
           title,
           {
@@ -449,11 +515,16 @@ export function AssetMap({
             ...(properties.energyAssetId
               ? { __assetId: properties.energyAssetId }
               : overlay.id === 'assets'
-                ? { __assetId: id }
+                ? { __assetId: id, energyAssetId: id }
                 : {}),
           },
-          overlay.id === 'flood_reference'
-            ? (eventKey) => onExploreFloodEvidenceRef.current(eventKey)
+          ['assets', 'asset_exposure', 'asset_vulnerability', 'asset_criticality', 'interventions'].includes(
+            overlay.id,
+          )
+            ? (assetId) => onExploreAssetEvidenceRef.current(assetId)
+            : undefined,
+          overlay.id === 'vulnerability_summaries'
+            ? (level, unitId) => onExploreAreaEvidenceRef.current(level, unitId)
             : undefined,
         );
         layer.add(

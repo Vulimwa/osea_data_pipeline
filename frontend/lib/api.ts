@@ -270,13 +270,24 @@ export async function fetchReferenceLayer(
   };
 }
 
-export function fetchFloodReferenceEvent(eventKey: string): Promise<GeoJsonCollection> {
-  const query = new URLSearchParams({
-    eventKey,
-    limit: '500',
-    offset: '0',
-  });
-  return getJson<GeoJsonCollection>(`/layers/flood_reference/geojson?${query.toString()}`);
+export type AdministrativeSummary = {
+  type: 'Feature';
+  id: string;
+  geometry: GeoJSON.Geometry;
+  properties: Record<string, unknown> & {
+    level?: 'ward' | 'county';
+    name?: string | null;
+    vulnerabilitySummary?: Record<string, unknown>;
+  };
+};
+
+export function fetchAdministrativeSummary(
+  level: 'ward' | 'county',
+  unitId: string,
+): Promise<AdministrativeSummary> {
+  return getJson<AdministrativeSummary>(
+    `/administrative/${level}/${encodeURIComponent(unitId)}/summary`,
+  );
 }
 
 export function withTimeout<T>(promise: Promise<T>, ms: number): Promise<T> {

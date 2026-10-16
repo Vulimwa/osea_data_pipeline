@@ -13,7 +13,7 @@ export default function App() {
           <Route path="map" element={<MapPage />} />
           <Route path="briefing" element={<OverviewPage />} />
           <Route path="evidence" element={<EvidencePage />} />
-          <Route path="evidence/flood/:eventKey" element={<EvidencePage />} />
+          <Route path="evidence/area/:level/:unitId" element={<EvidencePage />} />
           <Route path="evidence/:assetId" element={<EvidencePage />} />
           <Route path="*" element={<Navigate to="/" replace />} />
         </Route>
