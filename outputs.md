@@ -1,82 +1,48 @@
-A. National energy and contextual data foundation
-What exists, where it exists, and what surrounds it.
-- Energy-asset inventory: power stations, substations, transformers, transmission lines, mini-grids and other verified assets.
-- Network geometry and connectivity, where available.
-- Counties, wards, settlements, buildings, roads, rivers and water bodies.
-- Population distribution and density.
-- Night-time lights and changes in human activity.
-- Land cover, vegetation, terrain, soil and drainage context.
-- Critical services: healthcare, water, schools and other available facilities.
-- Source catalog, data coverage, dates and provenance.
+# OSEAS project scope and deliverables
 
+OSEAS is a spatial evidence pipeline and decision-support application for understanding climate hazards in relation to energy infrastructure in Kenya. This document describes what the repository implements; it is not a future-feature checklist or a claim that every source has current, complete coverage.
 
-B. Climate and hazard intelligence
-What hazards occur, where, and relative to what baseline.
-- Flood candidate extents and reference-event footprints.
-- Rainfall accumulations, anomalies and extreme-rainfall indicators.
-- Flood susceptibility context from terrain, drainage and hydrology.
-- Heat exposure, land-surface temperature and heat anomalies.
-- Wildfire detections, burned areas and fire proximity.
-- Drought or water-stress indicators where supported.
-- Severe-wind hazard indicators only where appropriate hazard data exists.
-- Hazard observation coverage, dates, thresholds and quality flags.
+## Challenge
 
-C. Asset exposure and consequences
-Which infrastructure intersects the evidence, and what may be affected.
-- Asset-by-hazard exposure register.
-- Exposed transmission-line length and percentage of assessed length.
-- Exposed substations, transformers, power stations and mini-grids.
-- Estimated population within hazard footprints.
-- Contextual night-time-light intensity around exposed infrastructure.
-- Critical facilities and verified service dependencies.
-- Asset criticality and vulnerability screening, with explanations.
-- Resilience indicators and explicit unknowns.
+Climate observations, hazard products, infrastructure inventories, service locations and administrative boundaries are maintained in separate systems. That makes it difficult to see which assets intersect hazard evidence, compare evidence between places, or know whether a reported result is complete enough to act on.
 
-D. National-to-local reporting
-Where evidence is concentrated, incomplete or requires investigation.
-- National overview and county/ward summaries.
-- Asset counts, assessed counts and exposure statistics.
-- Hazard intensity and observation coverage.
-- Population potentially exposed.
-- Critical infrastructure and service-context summaries.
-- Data gaps and unassessed locations.
-- Time-series and event comparisons.
+## Solution
 
+OSEAS connects these sources through repeatable ingestion and geospatial processing. It stores assets and derived evidence in PostgreSQL/PostGIS, serves read-only and provenance-aware APIs, and presents map and evidence views in a React application using the ArcGIS Maps SDK.
 
-E. Decision support
-What should be investigated or prioritized, and why.
-- Transparent intervention-priority register.
-- Asset and location rankings with supporting evidence.
-- Candidate hardening, protection or alternative-siting scenarios.
-- Baseline-versus-scenario comparisons.
-- Evidence-based service-impact context.
-- Sensitivity analysis and explanations of ranking changes.
-- Recommended data collection and field-verification priorities.
+The system distinguishes among:
 
-F. Operational and frontend outputs
-The infrastructure that makes the product usable.
-- Versioned, map-ready layers and filtered GeoJSON APIs.
-- Asset detail, hazard assessment and administrative-summary endpoints.
-- Source catalog and data-coverage endpoints.
-- Scenario, intervention and run-history APIs.
-- Provenance, data-quality and model-validation records.
-- Processing status, error logs, warnings and readiness checks.
+- **Observation:** a value measured or reported by a source, with period and unit.
+- **Hazard evidence:** a source or model output indicating a possible hazard condition.
+- **Exposure:** a spatial relationship between hazard evidence and an asset or reporting unit.
+- **Interpretation:** a conclusion drawn from evidence, with limitations and missing inputs.
 
-G. OSEAS evidence-to-action product requirements
-The platform must connect hazard evidence to infrastructure and service decisions, with traceability and explicit unknowns. A generic national asset catalogue or a set of hazard maps is not the deliverable.
-- Centralized and decentralized energy assets assessed separately by asset class and source completeness.
-- Per-asset evidence chain from source, observation date, method, spatial coverage, and processing run through measured exposure and decision-support context.
-- Reliability-risk context that distinguishes observed hazard exposure from actual outage, failure, or service interruption. Outage history and verified network topology are required before estimating those outcomes.
-- Verified service relationships and documented unknowns; geographic proximity alone is not an electrical dependency.
-- Population and human-activity context linked to exposed infrastructure without claiming that a specific asset serves a settlement.
-- County, ward, network, and asset summaries with assessed/unknown denominators and valid observation coverage.
-- Intervention investigation priorities whose evidence contributions are visible; unsupported engineering benefit and cost claims remain unavailable.
+These are not interchangeable. For example, rainfall is not a flood extent, a model candidate is not confirmed inundation, and an exposure intersection is not a prediction of equipment failure.
 
-H. First-class NASA VIIRS Black Marble nighttime lights
-Nighttime lights are a contextual evidence dataset and map layer, not a basemap decoration or an electricity-access proxy.
-- Use NASA Black Marble monthly VNP46A3 and, where useful, annual VNP46A4 radiance composites with product quality flags.
-- Track valid observations, quality-mask exclusions, source dates, radiance units, resolution, source version, and spatial coverage.
-- Produce quality-aware recent-period radiance and an explicitly selected earlier baseline, plus change indicators for administrative areas, energy assets, and critical services where coverage supports them.
-- Distinguish true zero radiance from missing, invalid, cloud-affected, or low-quality observations.
-- Treat changes as investigation signals only. Night lights do not prove household electricity access, feeder/substation service, outage duration, asset damage, or causal impact.
-- Do not finalize the “latest 36 complete months” until the source manifest confirms that the months and Kenya tiles are actually available; retain the selected dates in run provenance.
+## Delivered capabilities
+
+- Earth Engine feature-asset auditing and paged, idempotent ingestion.
+- PostGIS storage for energy assets, critical services, administrative units, hazard evidence, exposure, processing runs, source versions and quality records.
+- County/ward spatial assignment and administrative reporting.
+- Source-specific CHIRPS rainfall, NASA POWER heat, VIIRS nighttime-lights, FIRMS active-fire and WorldPop population workflows, subject to their individual source/run status.
+- Bounded Sentinel-1 flood screening and Prithvi-EO flood/water candidate workflows.
+- Read-only API routes for map layers, assets, assessment detail, runs, readiness and source catalog.
+- React/ArcGIS map and evidence interfaces for inspecting available spatial outputs.
+- A separate CGF-ACI Earth Engine prototype output. Its score is exploratory and is not a validated OSEAS production risk score.
+
+## Documented processing examples
+
+The repository records historical run snapshots, including a CHIRPS run with 7,878 county/ward measurements for two 2024 reference events and a 2024 NASA POWER run with 215,208 observations, 101,987 asset exposure rows and 1,261 county/ward summaries. These numbers describe those runs only. Check the API readiness and latest run records before presenting them as current.
+
+## What the system does not claim
+
+- A validated national probability of grid failure or outage.
+- A complete, current census of every Kenyan energy asset.
+- Confirmed flooding from Sentinel-1 or Prithvi screening candidates.
+- Verified electrical connections based on geographic proximity.
+- A national composite vulnerability, criticality or resilience score where required evidence is missing.
+- Current retrieval or coverage simply because a dataset appears in the catalog.
+
+## Further reading
+
+Start with the [OSEAS project README](osea_data_pipe/README.md). It links to the [architecture](osea_data_pipe/docs/ARCHITECTURE.md), [data catalog](osea_data_pipe/docs/DATA_CATALOG.md), [assessment methods](osea_data_pipe/docs/ASSESSMENT_METHODS.md), [model card](osea_data_pipe/docs/MODEL_CARD.md), [pipeline runbook](osea_data_pipe/docs/END_TO_END_RUNBOOK.md), [API contracts](osea_data_pipe/docs/API_CONTRACTS.md), and [frontend guide](osea_data_pipe/docs/FRONTEND_INTEGRATION_GUIDE.md).

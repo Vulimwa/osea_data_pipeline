@@ -205,6 +205,29 @@ const layerDefinitions: LayerDefinition[] = [
   },
 ];
 
+const directRasterChoices: Record<string, Array<{ id: string; title: string; band: string; unit: string }>> = {
+  nasa_viirs_black_marble_monthly: [{
+    id: 'gee_nasa_viirs_black_marble_monthly',
+    title: 'Recent VIIRS Black Marble radiance',
+    band: 'DNB_BRDF_Corrected_NTL',
+    unit: 'nW cm-2 sr-1',
+  }],
+  chirps_daily: [{
+    id: 'gee_chirps_daily',
+    title: 'Latest CHIRPS daily precipitation',
+    band: 'precipitation',
+    unit: 'mm/day',
+  }],
+  era5_land_daily: [
+    { id: 'gee_era5_land_daily_temperature', title: 'ERA5-Land daily temperature', band: 'temperature_2m', unit: 'K' },
+    { id: 'gee_era5_land_daily_precipitation', title: 'ERA5-Land daily precipitation', band: 'total_precipitation_sum', unit: 'm/day' },
+  ],
+  era5_daily: [
+    { id: 'gee_era5_daily_temperature', title: 'ERA5 daily mean temperature', band: 'mean_2m_air_temperature', unit: 'K' },
+    { id: 'gee_era5_daily_precipitation', title: 'ERA5 daily precipitation', band: 'total_precipitation', unit: 'm/day' },
+  ],
+};
+
 const defaultVisible: LayerId[] = [
   'assets',
   'asset_exposure',
@@ -240,6 +263,8 @@ export function MapPage() {
     searchParams.get('area') === 'kenya' ? 'kenya' : 'kano',
   );
   const [geeLayerVisibility, setGeeLayerVisibility] = useState<Record<string, boolean>>({});
+  const [onDemandGeeLayers, setOnDemandGeeLayers] = useState<import('../lib/api').GeeMapLayer[]>([]);
+  const [loadingGeeLayers, setLoadingGeeLayers] = useState<Record<string, boolean>>({});
   const [basemapStyle, setBasemapStyle] = useState<BasemapStyle>('theme');
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const [visibleLayers, setVisibleLayers] = useState<LayerId[]>(defaultVisible);
@@ -566,7 +591,13 @@ export function MapPage() {
                         <calcite-label className="layer-toggle" key={layer.id}>
                           <span className="layer-label">
                             <span>{layer.title}</span>
-                            <small>{layer.id === 'composite_hazard_raster' ? 'Raster · opacity 65%' : 'GEE vector tiles'}</small>
+                            <small>
+                              {layer.datasetKey
+                                ? `Raster · ${layer.unit ?? 'unit unavailable'} · ${layer.periodLabel ?? 'period unavailable'}`
+                                : layer.id === 'composite_hazard_raster'
+                                  ? 'Raster · opacity 65%'
+                                  : 'GEE vector tiles'}
+                            </small>
                           </span>
                           <calcite-switch
                             checked={layer.visible || undefined}
@@ -585,11 +616,14 @@ export function MapPage() {
                     const unitText = Object.values(entry.units ?? {}).filter(Boolean).join(', ') || '—';
                     const palette = entry.style?.palette ?? [];
                     const mappedLayer = layerDefinitions.find((layer) => layer.id === entry.mapLayer);
+                    const liveTile = geeMapLayers.find((layer) => layer.datasetKey === entry.key);
                     return (
                       <div key={entry.key} className="raster-legend-card">
                         <div className="raster-legend-header">
                           <strong>{entry.name}</strong>
-                          <span>{entry.retrievalStatus.replaceAll('_', ' ')}</span>
+                          <span>
+                            {liveTile ? 'live GEE map tile' : entry.retrievalStatus.replaceAll('_', ' ')}
+                          </span>
                         </div>
                         {palette.length > 0 && (
                           <div className="raster-legend-swatches" aria-label={`${entry.name} legend`}>
@@ -604,8 +638,23 @@ export function MapPage() {
                         </div>
                         <div className="raster-legend-meta">
                           <span>Period</span>
-                          <strong>{entry.style?.observationPeriod ?? entry.temporalCoverage ?? 'Not specified'}</strong>
+                          <strong>{liveTile?.periodLabel ?? entry.style?.observationPeriod ?? entry.temporalCoverage ?? 'Not specified'}</strong>
                         </div>
+                        {liveTile && (
+                          <calcite-label className="layer-toggle">
+                            <span className="layer-label">
+                              <span>Show live raster</span>
+                              <small>{liveTile.band} · {liveTile.unit}</small>
+                            </span>
+                            <calcite-switch
+                              checked={liveTile.visible || undefined}
+                              label={`Show ${liveTile.title}`}
+                              oncalciteSwitchChange={(event) =>
+                                setGeeLayerVisible(liveTile.id, Boolean((event.target as HTMLElement & { checked?: boolean }).checked))
+                              }
+                            />
+                          </calcite-label>
+                        )}
                         {mappedLayer && (
                           <calcite-label className="layer-toggle">
                             <span className="layer-label">

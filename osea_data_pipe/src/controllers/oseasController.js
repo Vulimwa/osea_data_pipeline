@@ -25,8 +25,19 @@ const windProducts = {
 };
 const windCacheDir = path.join(projectRoot, 'data/raw/global_wind_atlas/KEN');
 const geeMapLayersScript = path.join(projectRoot, 'scripts', 'get_gee_map_layers.py');
-let geeMapLayersCache = null;
-let geeMapLayersCacheExpiresAt = 0;
+const geeMapLayerIds = new Set([
+  'composite_hazard_raster',
+  'kenya_wards_vulnerability_vector',
+  'vulnerable_minigrids_vector',
+  'vulnerable_substations_vector',
+  'gee_nasa_viirs_black_marble_monthly',
+  'gee_chirps_daily',
+  'gee_era5_land_daily_temperature',
+  'gee_era5_land_daily_precipitation',
+  'gee_era5_daily_temperature',
+  'gee_era5_daily_precipitation',
+]);
+const geeMapLayersCache = new Map();
 const availableWindProducts = () => Object.entries(windProducts)
   .filter(([, product]) => fs.existsSync(path.join(windCacheDir, product.file)));
 const mapLayerSql = {
@@ -476,21 +487,29 @@ const getRasterRegistry = asyncRoute(async (_req, res) => {
   });
 });
 
-const getGeeMapLayers = asyncRoute(async (_req, res) => {
-  if (geeMapLayersCache && Date.now() < geeMapLayersCacheExpiresAt) {
-    return res.json(geeMapLayersCache);
+const getGeeMapLayers = asyncRoute(async (req, res) => {
+  const requestedLayer = req.query.layer;
+  if (requestedLayer != null && (typeof requestedLayer !== 'string' || !geeMapLayerIds.has(requestedLayer))) {
+    throw new AppError('INVALID_LAYER', 'Unknown Earth Engine map layer', 400);
   }
-  const python = process.env.PYTHON_EXECUTABLE || process.env.PYTHON || 'python';
+  const cacheKey = requestedLayer || 'default';
+  const cached = geeMapLayersCache.get(cacheKey);
+  if (cached && Date.now() < cached.expiresAt) return res.json(cached.payload);
+  const python = process.env.PYTHON_EXECUTABLE || 'python';
   let stdout;
   try {
-    ({ stdout } = await execFileAsync(python, [geeMapLayersScript], {
+    ({ stdout } = await execFileAsync(
+      python,
+      requestedLayer ? [geeMapLayersScript, requestedLayer] : [geeMapLayersScript],
+      {
       cwd: projectRoot,
       timeout: 120000,
       maxBuffer: 1024 * 1024,
       windowsHide: true,
-    }));
+      },
+    ));
   } catch (error) {
-    console.error('Unable to prepare Earth Engine map layers', error.message);
+    console.error('Unable to prepare Earth Engine map layers', error.code || error.name);
     throw new AppError(
       'GEE_MAP_LAYERS_UNAVAILABLE',
       'Earth Engine map layers could not be prepared; check backend Earth Engine credentials and asset access.',
@@ -498,13 +517,14 @@ const getGeeMapLayers = asyncRoute(async (_req, res) => {
     );
   }
   try {
-    geeMapLayersCache = JSON.parse(stdout);
+    const payload = JSON.parse(stdout);
+    geeMapLayersCache.set(cacheKey, { payload, expiresAt: Date.now() + 10 * 60 * 1000 });
+    return res.json(payload);
   } catch (error) {
-    console.error('Earth Engine map layer script returned invalid JSON', error.message);
+    if (error instanceof AppError) throw error;
+    console.error('Earth Engine map layer script returned invalid JSON', error.code || error.name);
     throw new AppError('GEE_MAP_LAYERS_INVALID_RESPONSE', 'Earth Engine map layers returned an invalid response.', 502);
   }
-  geeMapLayersCacheExpiresAt = Date.now() + 10 * 60 * 1000;
-  res.json(geeMapLayersCache);
 });
 
 const getReadiness = asyncRoute(async (_req, res) => {

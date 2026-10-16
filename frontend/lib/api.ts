@@ -75,6 +75,10 @@ export type GeeMapLayer = {
   id: string;
   title: string;
   assetId: string;
+  datasetKey?: string;
+  band?: string;
+  unit?: string;
+  periodLabel?: string;
   urlTemplate: string;
   opacity: number;
   minScale: number;
@@ -375,8 +379,9 @@ export function fetchRasterRegistry() {
   return getJson<{ data?: RasterRegistryEntry[]; count?: number; source?: string }>('/raster-registry');
 }
 
-export function fetchGeeMapLayers() {
-  return getJson<{ data?: GeeMapLayer[] }>('/gee-map-layers');
+export function fetchGeeMapLayers(layer?: string) {
+  const query = layer ? `?layer=${encodeURIComponent(layer)}` : '';
+  return getJson<{ data?: GeeMapLayer[] }>(`/gee-map-layers${query}`);
 }
 
 export function fetchAssetExposure(id: string) {
