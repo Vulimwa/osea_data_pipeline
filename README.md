@@ -1,59 +1,68 @@
 # Climate Risk & Energy Infrastructure Vulnerability
 
-This project addresses the [OSEAS 2026 Climate Risk & Energy Infrastructure Vulnerability challenge](https://github.com/EnAccess/oseas26-climate-risk-infrastructure-vulnerability). Its goal is to assess how climate-related hazards affect the reliability and resilience of centralized and decentralized energy infrastructure, and to provide planners with GIS evidence they can inspect and use to guide further investigation.
+This project addresses the [OSEAS 2026 Climate Risk & Energy Infrastructure Vulnerability challenge](https://github.com/EnAccess/oseas26-climate-risk-infrastructure-vulnerability). We are building an open-source, satellite-enabled geospatial intelligence system to help energy planners determine which infrastructure deserves attention first, what evidence supports that priority, and what further action can reasonably be taken.
 
-The work is split across related but distinct components: the OSEAS data pipeline and application in this repository, the Energy Infrastructure Vulnerability Dataset and CAT workflow in the [vulnerability-workflow repository](https://github.com/Nosh-thee-techy/oseas26-climate-risk-infrastructure-vulnerability), and the separately processed CGF-ACI Google Earth Engine demo documented in [CGF_ACI.md](CGF_ACI.md). The CAT model is implemented in the linked vulnerability-workflow repository, and its data is held in the same database used by this project. CGF-ACI is a different analysis; it is not the CAT model and is not yet an OSEAS pipeline stage.
+## The problem
 
-## Challenge problem and goal
+Energy planners need to understand how climate hazards threaten energy infrastructure. Knowing where hazards and assets are located does not necessarily show which assets are most vulnerable, what evidence supports an assessment, or which preventive actions should be prioritized. Detailed engineering and operational information may also be unavailable, particularly for decentralized energy systems.
 
-Flooding, extreme heat, wildfire, drought and severe storms can affect energy infrastructure, including transmission and distribution networks, substations, power plants and mini-grids. Yet knowing where hazards and assets are located does not by itself show which assets are most vulnerable, what evidence supports that assessment, or where preventive action should come first. Detailed condition, network-dependency and outage data can also be scarce, especially for decentralized systems.
+Flooding, extreme heat, wildfire, drought and severe storms can affect power plants, transmission and distribution networks, substations and mini-grids. Planners need more than a map of hazards: they need traceable evidence connecting the hazard to exposed assets and a clear account of uncertainty and missing information.
 
-The challenge calls for an Energy Infrastructure Vulnerability Dataset in GIS format, with indicators such as flood exposure, heat stress, wildfire exposure, infrastructure criticality, service reliability risk and grid resilience. The analysis is intended to help planners identify hotspots and prioritize resilience work. Results need to be traceable and interpreted in light of their data coverage and assumptions.
+## The solution
 
-## Our solution
+The project brings together climate data, terrain, energy-infrastructure inventories and observed environmental change in reproducible geospatial workflows. It is designed to generate an auditable Energy Infrastructure Vulnerability Dataset and help users investigate hotspots, inspect the evidence and uncertainty behind assessments, and compare potential resilience interventions.
 
-We are building an open-source, satellite-enabled geospatial intelligence system that brings climate observations, terrain, energy infrastructure and observed environmental change into reproducible spatial workflows. The OSEAS pipeline stores spatial data and derived evidence in PostgreSQL/PostGIS, exposes read-oriented APIs, and provides an interactive React application using the ArcGIS Maps SDK. The separate vulnerability workflow produces GIS outputs for asset-level screening. Together, these components are intended to help planners inspect risk hotspots, understand the evidence and uncertainty, and consider where resilience interventions may be worth investigating.
+The solution spans two distinct codebases that use the same project database:
 
-The workflow distinguishes observations, modeled hazard evidence, spatial exposure and vulnerability interpretation. They are not interchangeable: rainfall is not a flood extent, a model candidate is not confirmed inundation, and an asset's intersection with a hazard layer is not a prediction of equipment failure.
+- The OSEAS pipeline and application in this repository handle data ingestion and spatial processing, store data and evidence in PostgreSQL/PostGIS, expose read-oriented APIs, and provide an interactive map and evidence interface.
+- The Energy Infrastructure Vulnerability Dataset and CAT model are implemented in the [vulnerability-workflow repository](https://github.com/Nosh-thee-techy/oseas26-climate-risk-infrastructure-vulnerability). That repository contains the CAT model code; its data is held in the shared database. Refer to it for the model's methods, outputs and validation status.
+
+The project also includes a separate [CGF-ACI Google Earth Engine demo](CGF_ACI.md). CGF-ACI is not the CAT model and is not yet integrated as an OSEAS pipeline stage.
+
+## Who it serves
+
+**Primary users:** energy planners and infrastructure-resilience teams at energy agencies, utilities, mini-grid operators, and county or national governments. They can use the evidence to identify assets for inspection, understand relative risk, and consider where resilience investments may be most valuable.
+
+**Secondary beneficiaries:** communities, health facilities, schools, agricultural businesses and water services that depend on reliable electricity. They may benefit when better-informed planning helps protect energy services.
+
+## What makes this different?
+
+The Energy Access Explorer already supports geospatial energy planning by combining energy supply, demand, infrastructure and socioeconomic information. We do not claim that putting energy datasets on a map is, by itself, novel.
+
+Our proposed differentiator is the traceable evidence chain:
+
+**Satellite observation → climate exposure → asset vulnerability → confidence and uncertainty → prioritized intervention**
+
+The aim is not to produce another map showing where climate risk exists. It is to help planners understand why an asset merits attention and what the evidence can—and cannot—support. We make source periods, coverage, assumptions and missing data visible rather than presenting an unexplained score. The contribution must be demonstrated through reproducible processing, measurable model performance and useful decision outputs; it is not established by the technology stack alone.
+
+Satellite observations can help detect environmental hazards and changes around infrastructure. They cannot independently establish transformer condition, battery degradation or actual outage probability. Those conclusions require additional engineering, network and operational evidence.
+
+## Intended deliverables
+
+1. **A reusable GIS vulnerability dataset** that addresses the challenge brief and supports asset-level investigation.
+2. **A reproducible Python and remote-sensing pipeline** that ingests multiple datasets and documents how outputs were produced.
+3. **An interactive ArcGIS Maps SDK and Calcite application** that lets planners inspect evidence, compare assets and explore interventions.
 
 ## What we have achieved
 
-- Built repeatable source registration, audit and ingestion workflows for energy assets, administrative boundaries, critical services and selected climate and hazard datasets.
-- Implemented geospatial processing and PostGIS persistence, with read-oriented APIs for catalog and readiness information, runs, assets, assessments and map layers.
+- Built repeatable source registration, auditing and ingestion workflows for energy assets, administrative boundaries, critical services and selected climate and hazard sources.
+- Implemented geospatial processing and PostGIS persistence, with read-oriented APIs for catalog/readiness information, processing runs, assets, assessments and spatial layers.
 - Developed an ArcGIS-based map and evidence interface for exploring available spatial outputs.
-- Implemented flood screening workflows in this repository using Sentinel-1 change evidence and Prithvi-EO water/flood candidates. These support investigation; they are not ground truth or damage estimates.
-- Implemented the Energy Infrastructure Vulnerability Dataset and CAT workflow in the [separate vulnerability-workflow repository](https://github.com/Nosh-thee-techy/oseas26-climate-risk-infrastructure-vulnerability). Its GIS output schema includes flood, heat and wildfire exposure, infrastructure criticality, service reliability risk and a grid resilience score, with Parquet and GeoJSON outputs. Its documented real-data run is a Kano Plains/Nyando pilot, not a national assessment: 64 of 64 assets fell inside the input rasters, flood exposure ranged from 0 to 0.600, and heat and wildfire remained unknown in that run. See that repository for configuration, methods, outputs and validation limits.
-- Processed a separate CGF-ACI climate-exposure demo in Google Earth Engine and hosted its raster and vector outputs. This work is distinct from the CAT model and is not yet integrated as an OSEAS pipeline stage.
+- Implemented Sentinel-1 change screening and Prithvi-EO water/flood candidate workflows in the OSEAS repository. These produce evidence for investigation; they are not confirmed inundation or damage estimates.
+- Implemented the Energy Infrastructure Vulnerability Dataset and CAT workflow in the [separate vulnerability-workflow repository](https://github.com/Nosh-thee-techy/oseas26-climate-risk-infrastructure-vulnerability). Its GIS output schema includes flood, heat and wildfire exposure, infrastructure criticality, service reliability risk and a grid resilience score, with Parquet and GeoJSON outputs. The documented real-data run is a Kano Plains/Nyando pilot: all 64 assets fell inside the input rasters, flood exposure ranged from 0 to 0.600, and heat and wildfire were unknown in that run. This is a pilot, not a national assessment.
+- Processed the separate CGF-ACI climate-exposure demo in Google Earth Engine and hosted its raster and vector outputs. It remains distinct from the CAT model and is not yet an OSEAS pipeline stage.
 
-The pilot results are bounded by their study area and input data. They should not be generalized to all of Kenya or presented as validated loss or outage estimates.
-
-## Primary users
-
-Energy planners and infrastructure-resilience teams working for energy agencies, utilities, mini-grid operators, and county or national governments. They can use the system to identify assets for further inspection, compare evidence and prioritize where resilience investments may be valuable.
-
-## Secondary beneficiaries
-
-Communities, health facilities, schools, agricultural businesses and water services that depend on reliable electricity. They benefit indirectly when better-informed planning helps protect energy services.
-
-## Why this solution stands out
-
-The Energy Access Explorer already supports geospatial energy planning by combining energy supply, demand, infrastructure and socioeconomic information. Combining datasets on a map is therefore not, by itself, a novel contribution.
-
-Our differentiator is the evidence chain connecting:
-
-**Satellite observation → climate exposure → asset vulnerability → confidence and uncertainty → prioritised intervention**
-
-In practical terms, the work combines reusable GIS outputs, documented processing and an application for examining evidence rather than presenting an unexplained risk score. It also makes boundaries visible: source periods and coverage matter, unknown inputs stay unknown, and screening evidence is not described as a confirmed impact. The distinct CAT workflow and OSEAS data platform share a database while remaining separately implemented; the CGF-ACI demo is documented separately rather than being presented as a production pipeline component.
-
-This is how the project aims to stand out; demonstrating it fully requires continued validation against independent observations and useful decision outcomes. Satellite imagery can help identify environmental hazards and changes near assets, but it cannot independently establish transformer condition, battery degradation or actual outage probability. Those need additional engineering and operational evidence.
+The pilot findings are bounded by their study area, input data and assumptions. Do not generalize them to all of Kenya or present them as validated loss or outage estimates.
 
 ## Technology and data
 
-The project uses Python for data processing and geospatial analysis, Earth Engine and satellite/climate sources for selected observations, PostgreSQL/PostGIS for spatial storage and queries, and a React application with the ArcGIS Maps SDK for interactive map and evidence views. The vulnerability workflow also provides GIS outputs in Parquet and GeoJSON. Dataset status, coverage, resolution and implementation notes are documented in the [data catalog](osea_data_pipe/docs/DATA_CATALOG.md); a catalog entry does not necessarily mean a source has a successful current run.
+The project uses Python for data processing and geospatial analysis; Earth Engine and satellite/climate sources for selected observations; PostgreSQL/PostGIS for spatial storage and queries; and React with the ArcGIS Maps SDK for interactive map and evidence views. The vulnerability workflow also produces GIS outputs in Parquet and GeoJSON.
+
+See the [data catalog](osea_data_pipe/docs/DATA_CATALOG.md) for source families, resolution and implementation notes. A dataset's presence in the catalog does not mean it has a successful, current run or complete coverage.
 
 ## Limits and responsible interpretation
 
-The project does not claim a validated national probability of grid failure, a complete current census of Kenyan energy assets, verified electrical connections based on proximity, or confirmed flooding from screening candidates. Do not infer outages, monetary losses or asset condition without appropriate supporting data. Check each result's source, date, spatial coverage, run status, assumptions and confidence before using it.
+The project does not claim a validated national probability of grid failure, a complete current inventory of Kenyan energy assets, verified electrical connections based on geographic proximity, or confirmed flooding from screening candidates. Do not infer outages, monetary losses or asset condition without appropriate supporting evidence. Check each result's source, date, spatial coverage, run status, assumptions and confidence before using it.
 
 ## Documentation
 
